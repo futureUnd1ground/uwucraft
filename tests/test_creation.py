@@ -93,6 +93,7 @@ def test_quick_create_never_prompts(paths, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert len(received) == 1
+    assert received[0].public_access == "relay"
     assert received[0].online_mode is False
     assert received[0].max_players == 12
     assert received[0].start and received[0].accept_eula
@@ -121,7 +122,9 @@ def test_backend_runs_all_steps_in_order(paths, monkeypatch):
     from uwucraft import auth
 
     calls = []
-    monkeypatch.setattr(creation, "dependencies", lambda: calls.append("dependencies"))
+    monkeypatch.setattr(
+        creation, "dependencies", lambda *a: calls.append("dependencies")
+    )
     monkeypatch.setattr(creation, "latest_compatible", lambda loader: "1.21.1")
 
     def install(loader, version, memory, port, accept, **kwargs):
@@ -176,6 +179,7 @@ def test_backend_runs_all_steps_in_order(paths, monkeypatch):
         "start",
         "network",
     ]
+    assert paths.load().public_access == "relay"
     assert report["verified"]
     assert json.loads((paths.data / "deployment.json").read_text())["name"] == "Friends"
 
@@ -477,6 +481,7 @@ async def test_tui_create_button_and_shared_backend(paths, monkeypatch):
     def backend(options, p, progress):
         progress("Проверяем шаг")
         calls.append(options)
+        assert options.public_access == "relay"
         return {
             "address": "8.8.8.8:25565",
             "verified": False,

@@ -974,7 +974,11 @@ class Uwucraft(App):
         from . import privilege
         from .deployment import configure, disable_legacy_service
 
-        if not windows() and not privilege.sudo_cached():
+        if (
+            self.paths.load().public_access == "direct"
+            and not windows()
+            and not privilege.sudo_cached()
+        ):
             problem = privilege.ensure_via_system(self, "настройка firewall nftables")
             if problem:
                 self.notify(problem, severity="warning", timeout=10)

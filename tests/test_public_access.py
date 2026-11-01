@@ -167,3 +167,85 @@ def test_relay_preferred_port_is_validated(paths, value, expected):
 
     atomic(paths.data / "relay-port", value)
     assert relay.preferred_port(paths) == expected
+
+
+@pytest.mark.parametrize("verified", [True, False])
+def test_relay_deployment_never_opens_router_or_firewall(paths, monkeypatch, verified):
+    from uwucraft import firewall, portmap, relay
+
+    config = paths.load()
+    config.public_access = "relay"
+    paths.save(config)
+
+    def forbidden(*a, **kw):
+        pytest.fail("Relay must not configure inbound firewall/NAT or use VPN exit")
+
+    monkeypatch.setattr(firewall, "configure", forbidden)
+    monkeypatch.setattr(portmap, "map_port", forbidden)
+    monkeypatch.setattr(network, "external_ipv4", forbidden)
+    monkeypatch.setattr(relay, "setup", lambda *a, **kw: {"address": "9.9.9.9:45678"})
+    monkeypatch.setattr(
+        network, "probe", lambda *a: {"online": True, "identity_verified": verified}
+    )
+    monkeypatch.setattr(network, "connection_address", lambda *a: "9.9.9.9:45678")
+    report = deployment.configure(paths)
+    assert report["verified"] is verified
+    assert report["address"] == ("9.9.9.9:45678" if verified else "")
+    assert bool(report["errors"]) is not verified
+
+
+def test_relay_failure_is_actionable_and_never_falls_back(paths, monkeypatch):
+    from uwucraft import relay
+
+    config = paths.load()
+    config.public_access = "relay"
+    paths.save(config)
+
+    def fail(*a, **kw):
+        raise Error("relay-host:7835 недоступен")
+
+    monkeypatch.setattr(relay, "setup", fail)
+    report = deployment.configure(paths)
+    assert not report["verified"] and not report["address"]
+    assert "7835" in report["errors"][0]
+
+
+def test_creation_default_and_explicit_direct():
+    from uwucraft.creation import CreateOptions
+
+    assert CreateOptions().public_access == "relay"
+    CreateOptions(public_access="direct", accept_eula=True).validate()
+    with pytest.raises(Error, match="relay или direct"):
+        CreateOptions(public_access="invalid", accept_eula=True).validate()
+
+
+def test_cli_explicit_direct_reaches_shared_creation_backend(paths, monkeypatch):
+    from uwucraft import creation
+
+    paths.file.unlink()
+    received = []
+
+    def create(options, **kwargs):
+        received.append(options.public_access)
+        return {
+            "verified": True,
+            "address": "9.9.9.9:25565",
+            "errors": [],
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(creation, "create", create)
+    result = CliRunner().invoke(
+        app,
+        [
+            "create",
+            "--quick",
+            "--public-access",
+            "direct",
+            "--port",
+            "25565",
+            "--accept-eula",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert received == ["direct"]

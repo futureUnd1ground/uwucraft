@@ -94,6 +94,7 @@ def create_command(
     dry_run: bool = False,
     offline_mode: bool = False,
     whitelist: bool = False,
+    public_access: str = "relay",
 ):
     """Создать сервер: краткий мастер или --quick без вопросов."""
     from .creation import CreateOptions, create, suggested_memory
@@ -146,6 +147,7 @@ def create_command(
         accept_eula=accept_eula,
         start=start,
         whitelist=whitelist,
+        public_access=public_access,
     )
     if dry_run:
         from dataclasses import asdict
@@ -713,8 +715,8 @@ def network_relay(stop: bool = False):
 
 
 @net.command("configure")
-def network_configure(wan_ip: str = ""):
-    """Автоматически настроить nftables, прямой проброс и проверить внешний порт."""
+def network_configure(wan_ip: str = "", public_access: str = ""):
+    """Настроить relay/direct доступ выбранного профиля и проверить Minecraft извне."""
     from .deployment import configure, disable_legacy_service
 
     paths = Paths()
@@ -722,11 +724,26 @@ def network_configure(wan_ip: str = ""):
         raise Error("Сначала создайте сервер: uwucraft create.")
     from . import privilege
 
-    problem = privilege.ensure_interactive("настройка firewall nftables")
+    if public_access:
+        if public_access not in {"relay", "direct"}:
+            raise Error("Публичный доступ: relay или direct.")
+        if public_access == "direct" and paths.load().public_access == "relay":
+            from .relay import stop
+
+            stop(paths)
+        with paths.lock():
+            config = paths.load()
+            config.public_access = public_access
+            paths.save(config)
+    problem = (
+        privilege.ensure_interactive("настройка firewall nftables")
+        if paths.load().public_access == "direct"
+        else ""
+    )
     if problem:
         console.print(problem, markup=False)
     disable_legacy_service()
-    with console.status("Настройка прямого публичного доступа…") as status:
+    with console.status("Настройка публичного доступа…") as status:
         report = configure(paths, status.update, wan_ip=wan_ip)
     show_creation_report(report)
     if report["errors"] or not report["verified"]:

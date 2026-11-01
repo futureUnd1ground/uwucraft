@@ -125,12 +125,9 @@ class CreateServer(ModalScreen):
                 id="create-whitelist",
             )
             yield Static(
-                (
-                    "Windows: брандмауэр запросит UAC; автозапуск — после входа пользователя.\n"
-                    if windows()
-                    else "Для firewall/зависимостей sudo запросит пароль сам в начале установки; программа не перезапускается.\n"
-                )
-                + "Режим «пиратка» не проверяет владение аккаунтом; на Paper/Purpur устанавливается AuthMe. Включите whitelist.",
+                "Публичный доступ: TCP relay bore.pub по умолчанию; трафик проходит через сторонний сервер. "
+                "Адрес появится после внешней проверки. Автозапуск Windows — после входа пользователя.\n"
+                "Режим «пиратка» не проверяет владение аккаунтом; на Paper/Purpur устанавливается AuthMe. Включите whitelist.",
                 id="create-note",
             )
             yield Static("", id="create-progress", markup=False)
@@ -212,7 +209,7 @@ class CreateServer(ModalScreen):
             self.query_one("#create-progress", Static).update(
                 "Режим без проверки лицензии: ник можно подделать; для публичного сервера включите whitelist."
             )
-        if not windows() and not _sudo_ready():
+        if options.public_access == "direct" and not windows() and not _sudo_ready():
             # Suspend the TUI so sudo itself can draw its password prompt;
             # uwucraft never reads or stores the password.
             from . import privilege

@@ -46,10 +46,13 @@ class CreateOptions:
     start: bool = True
     # Offline ("pirate") setups are exposed to forged account names; an
     # optional whitelist narrows who can join. Never forced, only offered.
+    public_access: str = "relay"
     whitelist: bool = False
 
     def validate(self):
         validate_name(self.name)
+        if self.public_access not in {"relay", "direct"}:
+            raise Error("Публичный доступ: relay или direct.")
         if self.loader not in installers.LOADERS:
             raise Error("Ядро: " + ", ".join(installers.LOADERS))
         if not 1024 <= self.port <= 65535 or not 1 <= self.max_players <= 10000:
@@ -73,7 +76,7 @@ class CreateOptions:
             )
 
 
-def dependencies():
+def dependencies(public_access="relay"):
     """Java is provisioned per-user; iproute2 is the only missing host utility."""
     if windows():
         if not shutil.which("powershell.exe"):
@@ -81,7 +84,7 @@ def dependencies():
         return []
     if not shutil.which("systemctl") or not shutil.which("loginctl"):
         raise Error("Нужна система с работающим systemd и пользовательской сессией.")
-    if not shutil.which("ip"):
+    if public_access == "direct" and not shutil.which("ip"):
         if not shutil.which("pacman"):
             return [
                 "Установите iproute2: команда ip необходима для определения маршрутизатора."
@@ -122,7 +125,7 @@ def create(options, paths=None, progress=None):
         )
     options.memory = options.memory or suggested_memory()
     progress("Проверка зависимостей и доступных ресурсов")
-    dependency_errors = dependencies() or []
+    dependency_errors = dependencies(options.public_access) or []
     options.version = options.version or latest_compatible(options.loader)
     progress("Установка совместимой Java и выбранного ядра")
     installers.install(
@@ -139,6 +142,10 @@ def create(options, paths=None, progress=None):
         whitelist=options.whitelist,
         progress=progress,
     )
+    with paths.lock():
+        config = paths.load()
+        config.public_access = options.public_access
+        paths.save(config)
     # No automatic op accounts: offline users cannot impersonate an administrator
     # before the owner has registered one.
     if not options.online_mode and options.loader in {"paper", "purpur"}:

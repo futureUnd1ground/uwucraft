@@ -1,4 +1,4 @@
-"""Direct IPv4 publication; configuration failures never masquerade as success."""
+"""Shared relay/direct IPv4 publication; configuration failures never masquerade as success."""
 
 import json
 import subprocess
@@ -99,6 +99,44 @@ def wan_error(wan):
 
 
 def configure(paths=None, progress=None, wan_ip=""):
+    paths = paths or Paths()
+    if paths.load().public_access == "direct":
+        return configure_direct(paths, progress, wan_ip)
+    from . import relay
+
+    progress = progress or (lambda message: None)
+    report = {
+        "address": "",
+        "verified": False,
+        "errors": [],
+        "warnings": [
+            "Публичный доступ через сторонний TCP relay bore.pub. При переподключении порт может измениться."
+        ],
+        "checked_at": time.time(),
+        "public_access": "relay",
+    }
+    try:
+        progress("Запуск публичного TCP relay bore.pub и настройка автозапуска")
+        value = relay.setup(paths, host=paths.load().relay_host)
+        progress("Независимая внешняя проверка Minecraft через TCP relay")
+        result = network.probe(value["address"], paths)
+        report["probe"] = result
+        if result["online"] and result["identity_verified"]:
+            report["address"] = network.connection_address(paths)
+            report["verified"] = True
+        else:
+            report["errors"].append(
+                "Relay запущен, но внешний Minecraft-вход не подтверждён. Повторите network check через минуту; проверьте готовность сервера и relay.log."
+            )
+    except (Error, OSError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        report["errors"].append("Публичный TCP relay не настроен: " + str(exc))
+    atomic(
+        paths.data / "deployment.json", json.dumps(report, ensure_ascii=False, indent=2)
+    )
+    return report
+
+
+def configure_direct(paths=None, progress=None, wan_ip=""):
     paths = paths or Paths()
     progress = progress or (lambda message: None)
     report = {
