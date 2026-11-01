@@ -202,6 +202,14 @@ def stop(paths=None):
     (paths.data / "relay.json").unlink(missing_ok=True)
 
 
+def preferred_port(paths):
+    try:
+        value = int((paths.data / "relay-port").read_text(encoding="ascii"))
+        return value if 1024 <= value <= 65535 else 0
+    except (OSError, ValueError):
+        return 0
+
+
 def _session(paths, executable, stopped):
     config = paths.load()
     host = config.relay_host
@@ -219,6 +227,8 @@ def _session(paths, executable, stopped):
         "127.0.0.1",
         "--to",
         ip,
+        "--port",
+        str(preferred_port(paths)),
     ]
     flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if windows() else {}
     process = subprocess.Popen(
@@ -268,6 +278,7 @@ def _session(paths, executable, stopped):
                     port = int(match[1])
                     if not 1024 <= port <= 65535:
                         raise Error("Relay выдал недопустимый порт.")
+                    atomic(paths.data / "relay-port", str(port))
                     address = f"{ip}:{port}"
                     (paths.data / "network-probe.json").unlink(missing_ok=True)
                     atomic(
@@ -293,7 +304,10 @@ def _session(paths, executable, stopped):
                         pass
                 if (paths.data / "relay-stop").exists():
                     shutdown()
-        return process.wait(), published
+        code = process.wait()
+        if not published and code:
+            (paths.data / "relay-port").unlink(missing_ok=True)
+        return code, published
     finally:
         finished.set()
         verifier.join(timeout=10)

@@ -157,3 +157,13 @@ def test_relay_status_rejects_reused_pid(paths):
 
     atomic(paths.data / "relay.json", json.dumps({"pid": os.getpid(), "created": 0}))
     assert relay.status(paths) == {}
+
+
+@pytest.mark.parametrize(
+    "value, expected", [("8374", 8374), ("0", 0), ("70000", 0), ("--secret x", 0)]
+)
+def test_relay_preferred_port_is_validated(paths, value, expected):
+    from uwucraft import relay
+
+    atomic(paths.data / "relay-port", value)
+    assert relay.preferred_port(paths) == expected
