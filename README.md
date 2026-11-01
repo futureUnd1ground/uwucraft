@@ -412,6 +412,7 @@ CI проверяет Python 3.11–3.14, lint, форматирование, т
 uwucraft/
 ├── .github/workflows/ci.yml
 ├── .gitignore
+├── CHANGELOG.md
 ├── LICENSE
 ├── README.md
 ├── install.sh
