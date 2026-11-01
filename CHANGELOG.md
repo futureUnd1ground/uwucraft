@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0 — 2026-11-01
+
+- Несколько независимых серверов: CLI --profile, profile list/use, TUI переключатель, отдельные миры/Java/порты/units/tasks и безопасный default legacy профиль.
+- Официальный каталог версий CLI/TUI, автоматический незанятый порт, Java 8 fallback для старых Mojang manifests, legacy Forge launcher и общая версия NeoForge prefix mapping.
+- Совместимость Java-клиентов: ViaVersion/ViaBackwards, опциональный ViaRewind, backup и управляемый restart, SHA-256 и staged plugin install.
+- Windows ZIP содержит официальный подписанный установщик Python; установка без winget, с проверкой SHA-256 и PSF Authenticode. Git checkout скачивает тот же файл автоматически.
+- Backup/restore default сохраняет другие профили; старые фоновые units фиксируются на default без перезапуска мира.
+
 ## 0.3.0 — 2026-11-01
 
 - Нативный Windows backend: APPDATA/LOCALAPPDATA, Windows file locks и защищённая локальная named-pipe консоль.

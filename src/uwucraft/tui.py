@@ -715,6 +715,9 @@ class Uwucraft(App):
         self.perform(lambda: backups.create(self.paths))
 
     def action_create(self):
+        if self.busy:
+            self.notify("Дождитесь текущей операции.", severity="warning")
+            return
         from .create_ui import CreateServer
         from .profiles import next_profile
 

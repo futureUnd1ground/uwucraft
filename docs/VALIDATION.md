@@ -36,3 +36,10 @@ HTTPS-сервис сообщил глобальный IPv4, но это не д
 ## Windows 0.3.0
 
 Новый native workflow использует windows-latest с Python 3.11 и 3.14 и JDK 21. Проверки отделены от Linux-only nft/systemd тестов. Windows tests выполняют реальные PowerShell Get-NetRoute/Get-NetIPAddress, регистрацию/чтение/удаление per-user задачи, msvcrt locking, UTF-8 в кириллических путях, скачивание и запуск Temurin JRE ZIP. Реальный маленький Java JAR проверяет named-pipe console, принятие команды, падение с кодом 3, автоматический новый PID, штатный stop и повторный start. Этот fixture не выдаётся за Minecraft. Firewall-проверка только при явно включённом integration env и admin token; тест удаляет своё временное TCP-правило. Из Linux нельзя проверить интерактивное окно UAC, вход/выход/перезагрузку Windows и реального игрового клиента — эти проверки остаются ручными.
+
+
+## Профили и Python bootstrap 0.4.0
+
+Добавлены проверки изоляции файлов/консолей/units, глобального CLI --profile без утечки между вызовами, миграции старых units без рестарта, сохранности остальных профилей после backup/restore default, официального каталога и TUI выбора профиля/версии. Via plugins загружаются вместе до замены, ошибка загрузки оставляет прежние JAR. Windows native test запускает два реальных JVM fixture одновременно и останавливает один, проверяя работоспособность другого. Настоящий Paper также проверяется в именованном профиле.
+
+Windows CI отдельно вызывает install.ps1 -BootstrapPython, даже когда системный Python присутствует: скачивает pinned официальный installer, проверяет SHA-256 и Authenticode PSF и устанавливает отдельный Python без winget. Release packaging вкладывает те же байты в vendor/python-installer.exe внутри Windows ZIP; бинарник не хранится в Git и не попадает в wheel. Проверка всех игровых клиентов, всех исторических модовых ядер и всех версий Via не подменяется fixture или списком опубликованных API версий.

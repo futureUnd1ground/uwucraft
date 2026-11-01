@@ -31,8 +31,8 @@ function Find-Python {
 
 function Install-Python {
     if (![Environment]::Is64BitOperatingSystem) { throw 'uwucraft requires 64-bit Windows 10/11.' }
-    $home = Join-Path $target 'python'
-    $executable = Join-Path $home 'python.exe'
+    $pythonHome = Join-Path $target 'python'
+    $executable = Join-Path $pythonHome 'python.exe'
     if (Test-Python $executable) { return $executable }
     $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'vendor\python-runtime.json') -Raw | ConvertFrom-Json
     $installer = Join-Path $PSScriptRoot 'vendor\python-installer.exe'
@@ -55,7 +55,7 @@ function Install-Python {
             throw 'Python Software Foundation signature is not valid. File rejected.'
         }
         Write-Host ('Installing Python ' + $manifest.version + ' for uwucraft (current user).')
-        $arguments = @('/quiet', 'InstallAllUsers=0', ('TargetDir="' + $home + '"'), 'Include_launcher=0', 'Include_test=0', 'Include_pip=1', 'PrependPath=0', 'Shortcuts=0', 'AssociateFiles=0')
+        $arguments = @('/quiet', 'InstallAllUsers=0', ('TargetDir="' + $pythonHome + '"'), 'Include_launcher=0', 'Include_test=0', 'Include_pip=1', 'PrependPath=0', 'Shortcuts=0', 'AssociateFiles=0')
         $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
         if ($process.ExitCode -notin @(0, 3010) -or !(Test-Python $executable)) {
             throw ('Python installation failed. Exit code: ' + $process.ExitCode)
