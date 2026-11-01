@@ -333,3 +333,21 @@ def test_latest_paper_skips_rc_and_unstable(monkeypatch):
 
     monkeypatch.setattr(sources, "metadata", fake)
     assert sources.latest_compatible("paper") == "26.2"
+
+
+def test_addresses_shows_saved_external_result(paths):
+    import time
+
+    paths.save(Config(public_address="example.test"))
+    atomic(
+        paths.data / "network-probe.json",
+        json.dumps(
+            {
+                "address": "example.test:25565",
+                "online": True,
+                "checked_at": time.time(),
+                "cached": False,
+            }
+        ),
+    )
+    assert network.addresses(paths)["reachability"] == "Доступен извне"

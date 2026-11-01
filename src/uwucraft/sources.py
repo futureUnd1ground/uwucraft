@@ -7,9 +7,10 @@ from urllib.parse import urlparse
 
 import httpx
 
+from . import __version__
 from .config import Error
 
-UA = "uwucraft/0.1.0 (https://github.com/futureUnd1ground/uwucraft)"
+UA = f"uwucraft/{__version__} (https://github.com/futureUnd1ground/uwucraft)"
 
 
 def get(url, **kwargs):

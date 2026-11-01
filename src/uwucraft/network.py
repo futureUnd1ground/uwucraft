@@ -41,20 +41,22 @@ def addresses(paths=None, public=False):
 
     tunnel = tunnel_status(paths)
     ip = config.public_address
-    if public and not ip:
+    if public and not ip and not tunnel:
         try:
             ip = str(ipaddress.ip_address(get(config.public_ip_url).text.strip()))
             if ":" in ip:
                 ip = "[" + ip + "]"
         except (Error, ValueError):
             ip = ""
+    public_address = tunnel.get("address") or (
+        f"{ip}:{config.port}" if ip else "Не определён"
+    )
     return {
-        "public": tunnel.get("address")
-        or (f"{ip}:{config.port}" if ip else "Не определён"),
+        "public": public_address,
         "local": f"{local}:{config.port}",
         "playit": config.playit_address or "Не настроен",
         "port": config.port,
-        "reachability": "Не удалось проверить извне",
+        "reachability": reachability(public_address, paths),
     }
 
 
