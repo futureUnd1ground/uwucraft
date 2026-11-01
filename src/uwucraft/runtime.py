@@ -23,8 +23,16 @@ def provision(major, paths=None):
         raise Error("Автоустановка Temurin не поддерживает эту архитектуру.")
     target = paths.data / "runtimes" / str(major)
     executable = "bin/java.exe" if windows() else "bin/java"
-    if (target / executable).exists():
+
+    def result():
+        if windows():
+            from .windows import java_path
+
+            return java_path(target / executable)
         return str(target / executable)
+
+    if (target / executable).exists():
+        return result()
     assets = metadata(
         f"https://api.adoptium.net/v3/assets/latest/{major}/hotspot",
         params={
@@ -59,4 +67,4 @@ def provision(major, paths=None):
             raise Error("Неожиданная структура Temurin runtime.")
         target.parent.mkdir(parents=True, exist_ok=True)
         roots[0].rename(target)
-    return str(target / executable)
+    return result()

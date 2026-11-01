@@ -147,6 +147,29 @@ Register-ScheduledTask -TaskName {literal(name)} -Action $action -Principal $pri
     return name
 
 
+def java_path(path):
+    """The Windows JRE launcher uses ANSI paths for DLL discovery on some builds.
+
+    8.3 paths keep Java usable under a Unicode Windows username. If 8.3 names
+    are disabled, never return an executable that will silently fail to load.
+    """
+    import ctypes
+
+    value = str(Path(path).absolute())
+    if value.isascii():
+        return value
+    buffer = ctypes.create_unicode_buffer(32768)
+    function = ctypes.windll.kernel32.GetShortPathNameW
+    function.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    function.restype = ctypes.c_uint32
+    count = function(value, buffer, len(buffer))
+    if count and count < len(buffer) and buffer.value.isascii():
+        return buffer.value
+    raise Error(
+        "Java Windows не поддерживает этот Unicode-путь при отключённых коротких именах 8.3. Задайте XDG_DATA_HOME на каталог с ASCII-путём (например C:\\uwucraft-data) и повторите установку."
+    )
+
+
 def pipe_address(paths):
     return "\\\\.\\pipe\\" + task_name(paths, "console")
 

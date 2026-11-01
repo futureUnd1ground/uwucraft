@@ -200,7 +200,7 @@ def _supervise(paths, config):
         argument_files = list((paths.server / "libraries").glob("**/" + argument_name))
         if len(argument_files) != 1:
             raise Error(f"Не найден однозначный Forge/NeoForge {argument_name}.")
-        args += ["@" + str(argument_files[0]), "nogui"]
+        args += ["@" + str(argument_files[0].relative_to(paths.server)), "nogui"]
     else:
         args += ["-jar", "server.jar", "nogui"]
     process = subprocess.Popen(

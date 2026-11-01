@@ -41,6 +41,7 @@ def test_windows_java_zip_and_cache(paths, monkeypatch):
     monkeypatch.setattr(runtime, "windows", lambda: True)
     monkeypatch.setattr(runtime.platform, "machine", lambda: "AMD64")
     calls = []
+    monkeypatch.setattr(windows, "java_path", str)
 
     def metadata(url, params):
         calls.append(params)
@@ -200,19 +201,18 @@ public class Fixture {
 """,
         encoding="utf-8",
     )
-    subprocess.run(["javac", str(source)], check=True, timeout=30)
+    subprocess.run(["javac", "Fixture.java"], cwd=paths.server, check=True, timeout=30)
     subprocess.run(
         [
             "jar",
             "--create",
             "--file",
-            str(paths.server / "server.jar"),
+            "server.jar",
             "--main-class",
             "Fixture",
-            "-C",
-            str(paths.server),
             "Fixture.class",
         ],
+        cwd=paths.server,
         check=True,
         timeout=30,
     )
