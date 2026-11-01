@@ -249,12 +249,16 @@ def _supervise(paths, config):
             pipe_address(paths), family="AF_PIPE", authkey=pipe_key(paths)
         )
 
+        pipe_shutdown = threading.Event()
+
         def serve_pipe():
             from multiprocessing import AuthenticationError
 
-            while process.poll() is None:
+            while True:
                 try:
                     with listener.accept() as client:
+                        if pipe_shutdown.is_set():
+                            return
                         if not client.poll(2):
                             continue
                         text = client.recv_bytes(4096).decode()
@@ -264,7 +268,8 @@ def _supervise(paths, config):
                 except (OSError, EOFError, UnicodeError, AuthenticationError):
                     continue
 
-        threading.Thread(target=serve_pipe, daemon=True).start()
+        pipe_thread = threading.Thread(target=serve_pipe, daemon=True)
+        pipe_thread.start()
     else:
         listener = socket.socket(socket.AF_UNIX)
         listener.bind(str(paths.socket))
@@ -307,6 +312,20 @@ def _supervise(paths, config):
         code = process.wait()
         persist("Stopped" if code == 0 else "Crashed")
     finally:
+        if windows():
+            # PipeListener.close only closes queued handles, not an active
+            # ConnectNamedPipe in another thread. Wake and join that accept
+            # before reusing the pipe name for a restarted JVM.
+            from multiprocessing.connection import Client
+
+            pipe_shutdown.set()
+            try:
+                with Client(
+                    pipe_address(paths), family="AF_PIPE", authkey=pipe_key(paths)
+                ):
+                    pass
+            finally:
+                pipe_thread.join(5)
         listener.close()
         paths.socket.unlink(missing_ok=True)
     return code
