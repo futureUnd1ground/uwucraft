@@ -24,6 +24,7 @@ from textual.widgets import (
 
 from . import backups, content, network, server
 from .config import Error, Paths
+from .platforms import windows
 from .themes import PALETTES, load_custom, theme
 
 NAV = [
@@ -133,6 +134,21 @@ class Uwucraft(App):
         yield from super().get_system_commands(screen)
         for name, description, action in [
             ("Создать сервер", "Мастер создания Minecraft", self.action_create),
+            (
+                "Импортировать сервер",
+                "Подключить существующий каталог сервера",
+                lambda: self.action_import(False),
+            ),
+            (
+                "Найти серверы",
+                "Обнаружить серверы в типичных каталогах",
+                lambda: self.action_import(True),
+            ),
+            (
+                "Удалить сервер",
+                "Удалить профиль текущего сервера",
+                self.action_delete,
+            ),
             ("Start server", "Запуск Minecraft", self.action_start),
             ("Stop server", "Сохранить мир и остановить", self.action_stop),
             ("Restart server", "Перезапуск сервера", self.action_restart),
@@ -175,6 +191,11 @@ class Uwucraft(App):
         yield Footer()
 
     async def on_mount(self):
+        from . import privilege
+
+        # Never draw a sudo password prompt over a running TUI screen; the
+        # wizard suspends the app first, then lets sudo itself authenticate.
+        privilege.ui_active = True
         for name, colors in PALETTES.items():
             self.register_theme(theme(name, colors))
         try:
@@ -227,10 +248,13 @@ class Uwucraft(App):
             await area.mount(
                 Horizontal(
                     Button("Создать сервер", id="create-server", variant="primary"),
+                    Button("Импортировать сервер", id="import-server"),
+                    Button("Найти серверы", id="discover-servers"),
                     Button("Start", id="start"),
                     Button("Stop", id="stop"),
                     Button("Restart", id="restart"),
                     Button("Backup", id="backup"),
+                    Button("Удалить сервер", id="delete-server", variant="error"),
                     Button("Разные клиенты", id="compat-setup"),
                     classes="actions",
                 )
@@ -258,7 +282,7 @@ class Uwucraft(App):
                 await area.mount(
                     self.card(
                         "GET STARTED",
-                        "Сервер пока не установлен.\nВ отдельном терминале: uwucraft create\nМастер проверит систему и запросит принятие EULA.",
+                        "Сервер пока не установлен.\n«Создать сервер» — новый сервер из официальных источников.\n«Импортировать сервер» / «Найти серверы» — подключить уже скачанный сервер без потери данных.\nМастер проверит систему и запросит принятие EULA.",
                     )
                 )
         elif self.page == "Console":
@@ -296,6 +320,7 @@ class Uwucraft(App):
                     Button("Get public IP", id="fetch-ip"),
                     Button("Check port", id="check-port"),
                     Button("Настроить доступ", id="configure-network"),
+                    Button("Включить TCP relay", id="enable-relay"),
                     classes="actions",
                 )
             )
@@ -489,9 +514,13 @@ class Uwucraft(App):
         return f"{c.name}\nMinecraft {c.version or '—'}  /  {c.loader.upper()}  /  {c.memory}\nСостояние: {state['status']}   Порт: {c.port}\nПроцесс RAM: {state.get('ram_mb', 0)} MiB   Uptime: {state.get('uptime', 0)}s"
 
     def connection(self):
-        data = network.addresses(self.paths)
-        address = "•••• (privacy mode)" if self.hide_addresses else data["public"]
-        return address + "\n" + network.reachability(data["public"], self.paths)
+        try:
+            address = network.connection_address(self.paths)
+            return (
+                "•••• (privacy mode)" if self.hide_addresses else address
+            ) + "\nВнешний вход подтверждён."
+        except Error:
+            return "Публичный адрес для игроков пока недоступен.\nNetwork → Настроить доступ: проверьте маршрут, белый IPv4 и внешний порт."
 
     def player_text(self):
         result = []
@@ -724,6 +753,72 @@ class Uwucraft(App):
         target = self.paths if not self.paths.file.exists() else next_profile()
         self.push_screen(CreateServer(target))
 
+    def action_import(self, discover):
+        if self.busy:
+            self.notify("Дождитесь текущей операции.", severity="warning")
+            return
+        from .import_ui import ImportServer
+
+        self.push_screen(ImportServer(discover=discover))
+
+    def action_delete(self):
+        if self.busy:
+            self.notify("Дождитесь текущей операции.", severity="warning")
+            return
+        if not self.paths.file.exists():
+            self.notify("Сервер не установлен.", severity="warning")
+            return
+        from .profiles import delete
+
+        config = self.paths.load()
+        imported = (self.paths.data / "server-location").exists()
+        note = (
+            "Файлы в " + str(self.paths.server) + " сохранятся (управление на месте)."
+            if imported
+            else "Мир в " + str(self.paths.server) + " будет удалён безвозвратно."
+        )
+        self.delete_profile(
+            f"Удалить сервер «{config.name}» (профиль {self.paths.profile})? " + note,
+            lambda: delete(self.paths.profile),
+        )
+
+    @work(group="mutation")
+    async def delete_profile(self, message, function):
+        if not await self.push_screen_wait(Confirm(message)):
+            return
+        self.busy = True
+        self.query_one("#loading", Static).update("◌ Выполняется операция…")
+        try:
+            warnings = await asyncio.to_thread(function)
+            self.notify("Профиль удалён. " + " ".join(warnings or []), timeout=8)
+        except Error as exc:
+            self.notify(str(exc), severity="error", timeout=10)
+            return
+        finally:
+            self.busy = False
+            self.query_one("#loading", Static).update("")
+        # The deleted profile may have been the active one: re-resolve.
+        self.paths = Paths()
+        self.minecraft_metrics = {}
+        self.log_snapshot = ""
+        self.last_error = ""
+        self.last_state = None
+        from .profiles import listing
+
+        items = listing()
+        picker = self.query_one("#profile-select", Select)
+        with picker.prevent(Select.Changed):
+            picker.set_options(
+                [(p.profile, p.profile) for p in items] or [("default", "default")]
+            )
+            picker.value = (
+                self.paths.profile
+                if any(p.profile == self.paths.profile for p in items)
+                else items[0].profile
+            )
+        await self.render_page()
+        self.update_state()
+
     def action_copy_address(self):
         self.copy_address("public")
 
@@ -732,13 +827,10 @@ class Uwucraft(App):
         self.notify("Обновлено")
 
     def copy_address(self, kind):
-        data = network.addresses(self.paths)
-        value = data["public"]
-        if value == "Не определён":
-            self.notify(
-                "Network → Get public IP или задайте public_address.",
-                severity="warning",
-            )
+        try:
+            value = network.connection_address(self.paths)
+        except Error as exc:
+            self.notify(str(exc), severity="warning")
             return
         if kind == "info":
             c = self.paths.load()
@@ -762,19 +854,22 @@ class Uwucraft(App):
             actions[action]()
         elif action == "create-server":
             self.action_create()
+        elif action in {"import-server", "discover-servers"}:
+            self.action_import(action == "discover-servers")
+        elif action == "delete-server":
+            self.action_delete()
+        elif action == "enable-relay":
+
+            def enable_relay():
+                from . import relay
+
+                value = relay.setup(self.paths)
+                network.probe(value["address"], self.paths)
+                return network.connection_address(self.paths)
+
+            self.perform(enable_relay)
         elif action == "configure-network":
-            from .deployment import configure, disable_legacy_service
-
-            def configure_public():
-                disable_legacy_service()
-                report = configure(self.paths)
-                return (
-                    "Внешний вход подтверждён."
-                    if report["verified"]
-                    else "Доступность извне не подтверждена. Диагностика — в Network."
-                )
-
-            self.perform(configure_public)
+            self.network_setup()
         elif action in {"copy-public", "copy-info"}:
             self.copy_address(action.split("-")[1])
         elif action == "pause":
@@ -873,6 +968,27 @@ class Uwucraft(App):
                 self.confirm("Выдать права оператора " + name + "?", function)
             else:
                 self.perform(function)
+
+    @work(group="mutation")
+    async def network_setup(self):
+        from . import privilege
+        from .deployment import configure, disable_legacy_service
+
+        if not windows() and not privilege.sudo_cached():
+            problem = privilege.ensure_via_system(self, "настройка firewall nftables")
+            if problem:
+                self.notify(problem, severity="warning", timeout=10)
+
+        def configure_public():
+            disable_legacy_service()
+            report = configure(self.paths)
+            return (
+                "Внешний вход подтверждён."
+                if report["verified"]
+                else "Доступность извне не подтверждена. Диагностика — в Network."
+            )
+
+        await self.perform(configure_public)
 
     @work(group="search", exclusive=True)
     async def remote_search(self, function):

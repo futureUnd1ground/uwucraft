@@ -38,7 +38,7 @@ def preflight(paths, memory, port):
     }
 
 
-def java_for(required, install=False, local_runtime=False, paths=None):
+def java_for(required, install=False, local_runtime=False, paths=None, progress=None):
     candidates = [
         f"/usr/lib/jvm/java-{required}-openjdk/bin/java",
         shutil.which("java") or "java",
@@ -60,7 +60,7 @@ def java_for(required, install=False, local_runtime=False, paths=None):
     if local_runtime:
         from .runtime import provision
 
-        return provision(required, paths)
+        return provision(required, paths, progress)
     package = (
         f"jre{required}-openjdk-headless" if required != 8 else "jre8-openjdk-headless"
     )
@@ -115,6 +115,7 @@ def install(
     name="My uwucraft server",
     max_players=20,
     whitelist=True,
+    progress=None,
 ):
     paths = paths or Paths()
     if not accept_eula:
@@ -142,7 +143,7 @@ def install(
         preflight(paths, memory, port)
         version, info = minecraft(version)
         required = info.get("javaVersion", {}).get("majorVersion", 8)
-        java = java_for(required, install_deps, local_runtime, paths)
+        java = java_for(required, install_deps, local_runtime, paths, progress)
         with tempfile.TemporaryDirectory(dir=paths.data) as directory:
             staging = Path(directory) / "server"
             staging.mkdir()
@@ -152,7 +153,7 @@ def install(
                 checksum = get(url + ".sha1").text.strip().split()[0]
                 if re.fullmatch("[0-9a-fA-F]{40}", checksum):
                     hashes = {"sha1": checksum}
-                download(url, staging / "installer.jar", hashes)
+                download(url, staging / "installer.jar", hashes, progress)
                 with (staging / "install.log").open("w") as log:
                     result = subprocess.run(
                         [java, "-jar", "installer.jar", "--installServer"],
@@ -181,7 +182,7 @@ def install(
                     legacy[0].rename(staging / "server.jar")
             else:
                 url, hashes, _ = resolve(loader, version)
-                download(url, staging / "server.jar", hashes)
+                download(url, staging / "server.jar", hashes, progress)
             atomic(staging / "eula.txt", "eula=true\n")
             atomic(
                 staging / "server.properties",

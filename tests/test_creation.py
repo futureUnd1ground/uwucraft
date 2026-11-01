@@ -190,7 +190,9 @@ def test_installer_writes_selected_fields(paths, monkeypatch):
         installers, "resolve", lambda *args: ("https://example.test/server.jar", {}, 21)
     )
     monkeypatch.setattr(
-        installers, "download", lambda url, target, hashes: target.write_bytes(b"jar")
+        installers,
+        "download",
+        lambda url, target, hashes, *args, **kwargs: target.write_bytes(b"jar"),
     )
     config = installers.install(
         "paper",
@@ -498,6 +500,7 @@ async def test_tui_create_button_and_shared_backend(paths, monkeypatch):
         assert calls, str(application.screen.query_one("#create-errors").render())
         assert calls[0].name == "Friends"
         assert application.screen.query_one("#create-copy").display
+        assert application.screen.query_one("#create-copy").disabled
         assert not application.screen.query("#create-fields")
         await pilot.click("#create-close")
 

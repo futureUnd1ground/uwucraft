@@ -153,7 +153,10 @@ def restore(name, paths=None):
                 # Never move the root config directory: it also contains other
                 # profiles. Replace this profile's entries, with rollback.
                 old_config.mkdir()
-                paths.server.rename(old)
+                if paths.server.exists() or paths.server.is_symlink():
+                    shutil.move(str(paths.server), old)
+                else:
+                    old.mkdir(parents=True)
                 installed = []
                 moved = []
                 try:
@@ -161,7 +164,7 @@ def restore(name, paths=None):
                         if entry.name not in preserved:
                             entry.rename(old_config / entry.name)
                             moved.append(entry.name)
-                    (staging / "server").rename(paths.server)
+                    shutil.move(str(staging / "server"), str(paths.server))
                     for entry in new_config.iterdir():
                         if entry.name not in preserved:
                             entry.rename(paths.config / entry.name)

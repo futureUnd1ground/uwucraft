@@ -46,11 +46,16 @@ class Config:
     theme: str = "uwu-dark"
     public_ip_url: str = "https://api.ipify.org"
     public_address: str = ""
+    public_access: str = "direct"
+    relay_host: str = "bore.pub"
     max_players: int = 20
     online_mode: bool = True
     server_id: str = ""
     backup_keep: int = 7
     name: str = "My uwucraft server"
+    # Absolute path of the server directory before it was imported; empty for
+    # servers created by uwucraft. Used to avoid duplicate imports.
+    imported_from: str = ""
 
 
 class Paths:
@@ -93,6 +98,17 @@ class Paths:
             else self.root_data / "profiles" / profile
         )
         self.server = self.data / "server"
+        # Imported servers are managed in place: a marker written into the data
+        # directory redirects every consumer (supervisor, backups, content) to
+        # the real directory without moving a single world or config file.
+        location = self.data / "server-location"
+        if location.exists() and not location.is_symlink():
+            try:
+                target = Path(location.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                target = None
+            if target is not None and target.is_absolute() and target.is_dir():
+                self.server = target
         self.backups = self.data / "backups"
         self.file = self.config / "config.toml"
         self.socket = self.data / "console.sock"

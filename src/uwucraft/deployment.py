@@ -98,7 +98,7 @@ def wan_error(wan):
     return ""
 
 
-def configure(paths=None, progress=None):
+def configure(paths=None, progress=None, wan_ip=""):
     paths = paths or Paths()
     progress = progress or (lambda message: None)
     report = {
@@ -109,6 +109,17 @@ def configure(paths=None, progress=None):
         "checked_at": time.time(),
     }
     config = paths.load()
+    report["outbound_route"] = network.outbound_route(paths)
+    if wan_ip:
+        import ipaddress
+
+        try:
+            report["router_wan"] = str(ipaddress.IPv4Address(wan_ip))
+        except ValueError as exc:
+            raise Error("WAN должен быть корректным IPv4 из статуса роутера.") from exc
+        problem = wan_error(wan_ip)
+        if problem:
+            report["errors"].append(problem)
 
     def step(message):
         progress(message)
@@ -181,6 +192,10 @@ def configure(paths=None, progress=None):
         report["errors"].append(
             "Сервер не запущен или публичный IPv4 не определён; доступность извне не проверена."
         )
+    if report["outbound_route"]["state"] == "tunnel":
+        (report["warnings"] if report["verified"] else report["errors"]).append(
+            "HTTPS-проверка IP идёт через активный сетевой туннель. Получен адрес его выхода, а не подтверждённый адрес домашнего сервера. Настройте прямой маршрут для Minecraft и определения IP; не раздавайте этот исходящий IP игрокам."
+        )
     if mapping_error:
         message = (
             mapping_error
@@ -211,12 +226,17 @@ def enable_server(paths):
         timeout=15,
     )
     if result.returncode:
-        result = subprocess.run(
-            ["sudo", "-n", "--", "loginctl", "enable-linger", getpass.getuser()],
-            capture_output=True,
-            timeout=15,
-        )
-        if result.returncode:
+        from . import privilege
+
+        try:
+            result = subprocess.run(
+                privilege.elevated(["loginctl", "enable-linger", getpass.getuser()]),
+                capture_output=True,
+                timeout=15,
+            )
+        except Error:
+            result = None
+        if result is None or result.returncode:
             return 'Не удалось включить linger: выполните sudo loginctl enable-linger "$USER" для работы после выхода из системы.'
     return ""
 

@@ -61,8 +61,10 @@ def show_creation_report(report):
     address = report.get("address") or "Публичный IPv4 не определён"
     console.print(
         Panel(
-            address,
-            title="Публичный адрес для подключения",
+            address if report.get("verified") else "Адрес для игроков пока недоступен",
+            title="Публичный адрес для подключения"
+            if report.get("verified")
+            else "Публичное подключение НЕ настроено",
             border_style="green" if report.get("verified") else "yellow",
         )
     )
@@ -90,10 +92,25 @@ def create_command(
     accept_eula: bool = False,
     start: bool = True,
     dry_run: bool = False,
+    offline_mode: bool = False,
+    whitelist: bool = False,
 ):
     """Создать сервер: краткий мастер или --quick без вопросов."""
     from .creation import CreateOptions, create, suggested_memory
 
+    # Fail before any prompt: the wizard must not ask questions about a
+    # profile that already holds a server. A dry-run only prints parameters
+    # and never touches the installation, so it stays allowed.
+    existing = Paths()
+    if not dry_run and (
+        existing.file.exists()
+        or (existing.server.exists() and any(existing.server.iterdir()))
+    ):
+        raise Error(
+            "Сервер уже существует и сохранён. Для повторной настройки публичного "
+            "доступа: uwucraft network configure. Для другого сервера: uwucraft "
+            "--profile ИМЯ create. Для удаления этого сервера: uwucraft delete."
+        )
     if port is None:
         from .profiles import suggested_port
 
@@ -111,7 +128,7 @@ def create_command(
         port = typer.prompt("TCP-порт", default=port, type=int)
         max_players = typer.prompt("Количество игроков", default=max_players, type=int)
     modes = {"license": True, "лицензия": True, "pirate": False, "пиратка": False}
-    mode = mode or "license"
+    mode = mode or ("pirate" if offline_mode else "license")
     if mode not in modes:
         raise Error("Режим: license/лицензия или pirate/пиратка.")
     if not quick and not accept_eula and not dry_run:
@@ -128,6 +145,7 @@ def create_command(
         max_players=max_players,
         accept_eula=accept_eula,
         start=start,
+        whitelist=whitelist,
     )
     if dry_run:
         from dataclasses import asdict
@@ -283,12 +301,7 @@ def update(dry_run: bool = False):
 
 @app.command("copy-address")
 def copy_address(player_info: bool = False):
-    data = network.addresses(public=True)
-    address = data["public"]
-    if address == "Не определён":
-        raise Error(
-            "Публичный IP получить не удалось. Задайте public_address в config.toml."
-        )
+    address = network.connection_address(refresh=True)
     text = address
     if player_info:
         config = Paths().load()
@@ -369,6 +382,131 @@ def datapack_add(source: str):
 @app.command("import-file")
 def import_file(source: str, kind: str = "mod", trust_file: bool = False):
     console.print(str(content.import_file(source, kind, trust_file)))
+
+
+@app.command("delete")
+def delete_command(
+    identifier: Annotated[str, typer.Argument()] = "",
+    yes: bool = False,
+    purge_files: bool = False,
+):
+    """Удалить профиль сервера: службы, метаданные и файлы uwucraft.
+
+    Без --purge-files файлы импортированного «на месте» сервера в его
+    каталоге сохраняются; мир сервера, созданного uwucraft, удаляется вместе
+    с профилем. Действие необратимо.
+    """
+    from .profiles import delete
+
+    identifier = identifier or Paths().profile
+    paths = Paths(profile=identifier)  # validate the ID early
+    if not paths.file.exists():
+        raise Error(
+            "Профиль не установлен: "
+            + identifier
+            + ". Установленные: uwucraft profile list."
+        )
+    config = paths.load()
+    marker = paths.data / "server-location"
+    imported = marker.exists() and not marker.is_symlink()
+    note = (
+        "Файлы сервера в "
+        + str(paths.server)
+        + (" будут удалены." if purge_files else " сохранятся (управление на месте).")
+        if imported
+        else "Мир сервера в " + str(paths.server) + " будет удалён."
+    )
+    if not yes and not typer.confirm(
+        f"Удалить сервер «{config.name}» (профиль {identifier}, "
+        f"{config.loader} {config.version or '—'})? {note} Продолжить?",
+        default=False,
+    ):
+        raise typer.Abort()
+    warnings = delete(identifier, purge_imported=purge_files)
+    console.print("Удалён профиль: " + identifier, markup=False)
+    for message in warnings:
+        console.print("Примечание: " + message, markup=False)
+
+
+@app.command("discover")
+def discover_command():
+    """Найти существующие серверы в типичных каталогах (без полного сканирования диска)."""
+    from .importer import discover, summarize
+
+    found = discover()
+    if not found:
+        console.print(
+            "Готовые серверы не найдены. Проверены домашний каталог (глубина 2), "
+            "Desktop, Downloads, Documents, Games, /opt и /srv."
+        )
+        return
+    for index, detected in enumerate(found, 1):
+        console.print(f"── Вариант {index} " + "─" * 40, markup=False)
+        console.print(summarize(detected), markup=False)
+    console.print("Импорт: uwucraft import ПУТЬ [--quick]", markup=False)
+
+
+@app.command("import")
+def import_command(
+    path: Annotated[str, typer.Argument(help="Каталог существующего сервера.")],
+    profile: str = "",
+    copy: bool = False,
+    loader: str = "",
+    version: str = "",
+    name: str = "",
+    memory: str = "",
+    quick: bool = False,
+    no_network: bool = False,
+):
+    """Подключить уже скачанный сервер к uwucraft без повторного скачивания.
+
+    По умолчанию файлы не перемещаются: uwucraft управляет сервером в его
+    каталоге. --copy дублирует сервер в каталог uwucraft. Миры, конфиги,
+    моды и server.properties не изменяются.
+    """
+    from .importer import register, scan, summarize
+
+    detected = scan(path)
+    console.print(Panel(summarize(detected), title="Распознанный сервер"))
+    if not quick:
+        if loader or detected.loader == "unknown" or not detected.version:
+            console.print(
+                "Проверьте ядро и версию; Enter оставляет распознанное значение.",
+                markup=False,
+            )
+        loader = typer.prompt(
+            "Ядро",
+            default=loader or detected.loader
+            if (loader or detected.loader) in installers.LOADERS
+            else "paper",
+        )
+        version = typer.prompt(
+            "Версия Minecraft (пусто — не задана)",
+            default=version or detected.version,
+        )
+        name = name or typer.prompt("Название", default=detected.directory.name)
+        memory = memory or typer.prompt("RAM", default=detected.memory or "2G")
+    with console.status("Импорт сервера…") as status:
+        report = register(
+            detected,
+            profile=profile or None,
+            copy=copy,
+            name=name or None,
+            loader=loader or None,
+            version=version or None,
+            memory=memory or None,
+            configure_network=not no_network,
+            progress=status.update,
+        )
+    console.print(
+        f"Профиль: {report['profile']} · сервер управляется в каталоге: "
+        + (str(Paths(profile=report["profile"]).server))
+    )
+    show_creation_report(report)
+    if report.get("backup"):
+        console.print("Первая резервная копия: " + report["backup"], markup=False)
+    if report.get("errors"):
+        raise typer.Exit(1)
 
 
 @app.command("whitelist")
@@ -554,17 +692,42 @@ def auth_reserve_admin(name: str):
     console.print(reserve_admin(name))
 
 
+@net.command("relay")
+def network_relay(stop: bool = False):
+    """Включить публичный TCP relay (сторонний сервер bore.pub) или отключить его."""
+    from . import relay
+
+    paths = Paths()
+    if stop:
+        relay.stop(paths)
+        console.print("TCP relay отключён.")
+        return
+    with console.status("Запуск публичного TCP relay…"):
+        value = relay.setup(paths)
+        result = network.probe(value["address"], paths)
+    if not result["online"] or not result["identity_verified"]:
+        raise Error(
+            "Relay запущен, но независимая проверка Minecraft ещё не подтвердила доступ. Повторите network check через минуту."
+        )
+    console.print(network.connection_address(paths), markup=False)
+
+
 @net.command("configure")
-def network_configure():
+def network_configure(wan_ip: str = ""):
     """Автоматически настроить nftables, прямой проброс и проверить внешний порт."""
     from .deployment import configure, disable_legacy_service
 
     paths = Paths()
     if not paths.file.exists():
         raise Error("Сначала создайте сервер: uwucraft create.")
+    from . import privilege
+
+    problem = privilege.ensure_interactive("настройка firewall nftables")
+    if problem:
+        console.print(problem, markup=False)
     disable_legacy_service()
     with console.status("Настройка прямого публичного доступа…") as status:
-        report = configure(paths, status.update)
+        report = configure(paths, status.update, wan_ip=wan_ip)
     show_creation_report(report)
     if report["errors"] or not report["verified"]:
         raise typer.Exit(1)

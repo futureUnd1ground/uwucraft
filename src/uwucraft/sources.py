@@ -56,24 +56,48 @@ def metadata(url, **kwargs):
     return get(url, **kwargs).json()
 
 
-def download(url, destination: Path, hashes=None):
+def download(url, destination: Path, hashes=None, progress=None, min_speed=0):
+    """Stream-download with verified hashes and transparent resume.
+
+    A .part file survives failures, so a retried download (or the next
+    mirror) continues from the last byte instead of starting over. When
+    min_speed (bytes/second) is given, a download slower than that during
+    the first windows raises Error so callers can switch the source.
+    progress(message) is throttled to ~4 updates per second.
+    """
     if urlparse(url).scheme != "https":
         raise Error("Загрузка разрешена только по HTTPS.")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".part")
-    digests = {
-        key: hashlib.new(key)
-        for key in (hashes or {})
-        if key in {"sha1", "sha256", "sha512", "md5"}
-    }
+    label = Path(urlparse(url).path).name or "файла"
+
+    def fresh_digests():
+        return {
+            key: hashlib.new(key)
+            for key in (hashes or {})
+            if key in {"sha1", "sha256", "sha512", "md5"}
+        }
+
+    digests = fresh_digests()
+    existing = temporary.stat().st_size if temporary.exists() else 0
+    if existing:
+        # Resume is only sound if the hash covers the whole file: replay the
+        # already-downloaded prefix into the digests before appending.
+        with temporary.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                for digest in digests.values():
+                    digest.update(chunk)
     try:
         for _ in range(6):
+            headers = {"User-Agent": UA}
+            if existing:
+                headers["Range"] = f"bytes={existing}-"
             with httpx.stream(
                 "GET",
                 url,
                 timeout=60,
                 follow_redirects=False,
-                headers={"User-Agent": UA},
+                headers=headers,
             ) as response:
                 if response.is_redirect:
                     redirect = response.headers.get("location")
@@ -85,20 +109,63 @@ def download(url, destination: Path, hashes=None):
                     url = str(next_url)
                     continue
                 response.raise_for_status()
-                with temporary.open("wb") as stream:
-                    size = 0
+                if existing and response.status_code != 206:
+                    # The server ignored Range: restart from a clean file.
+                    existing = 0
+                    digests = fresh_digests()
+                total = (
+                    existing + int(response.headers.get("content-length") or 0)
+                    if existing
+                    else int(response.headers.get("content-length") or 0)
+                )
+                mode = "ab" if existing else "wb"
+                size = existing
+                last_report = 0.0
+                window_start = time.monotonic()
+                window_bytes = 0
+                with temporary.open(mode) as stream:
                     for chunk in response.iter_bytes():
                         size += len(chunk)
+                        window_bytes += len(chunk)
                         if size > 2 * 1024**3:
                             raise Error("Файл превышает лимит 2 GiB.")
                         stream.write(chunk)
                         for digest in digests.values():
                             digest.update(chunk)
+                        now = time.monotonic()
+                        if progress is not None and now - last_report > 0.25:
+                            last_report = now
+                            elapsed = max(now - window_start, 0.001)
+                            speed = window_bytes / elapsed
+                            done = size
+                            if total:
+                                percent = done * 100 // total
+                                progress(
+                                    f"Скачивание {label}: "
+                                    f"{done / 1024**2:.0f}/{total / 1024**2:.0f} МиБ "
+                                    f"({percent}%) · {speed / 1024:.0f} КБ/с"
+                                )
+                            else:
+                                progress(
+                                    f"Скачивание {label}: {done / 1024**2:.0f} МиБ "
+                                    f"· {speed / 1024:.0f} КБ/с"
+                                )
+                        if min_speed and now - window_start > 20:
+                            speed = window_bytes / (now - window_start)
+                            if speed < min_speed:
+                                raise Error(
+                                    f"Скорость загрузки {label} слишком низкая "
+                                    f"({speed / 1024:.0f} КБ/с); источник пропущен."
+                                )
+                            window_start, window_bytes = now, 0
                 break
         else:
             raise Error("Слишком много перенаправлений при загрузке.")
         for key, digest in digests.items():
             if digest.hexdigest().lower() != hashes[key].lower():
+                # Corrupt content, not a network blip: a resumed retry would
+                # replay the same bad bytes, so drop the partial file.
+                temporary.unlink(missing_ok=True)
                 raise Error("Хеш не совпадает: файл отклонён.")
         temporary.replace(destination)
     except httpx.HTTPError:
@@ -106,7 +173,14 @@ def download(url, destination: Path, hashes=None):
             "Загрузка прервана; проверьте доступ к источнику и повторите."
         ) from None
     finally:
-        temporary.unlink(missing_ok=True)
+        # Keep a non-empty .part file so the next attempt (or mirror) resumes
+        # instead of restarting; drop only a never-started empty part.
+        if (
+            not destination.exists()
+            and temporary.exists()
+            and temporary.stat().st_size == 0
+        ):
+            temporary.unlink(missing_ok=True)
 
 
 MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"

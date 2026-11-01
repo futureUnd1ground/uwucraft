@@ -385,6 +385,14 @@ UMask=0077
 [Install]
 WantedBy=default.target
 """
+    # An imported server can live outside paths.data (see importer); the unit
+    # must allow writing there or the JVM could not save the world.
+    writable = {str(paths.data), str(paths.server)}
+    if len(writable) > 1:
+        content = content.replace(
+            f"ReadWritePaths={quote(paths.data)}",
+            "ReadWritePaths=" + " ".join(quote(path) for path in sorted(writable)),
+        )
     file = Path.home() / ".config/systemd/user" / paths.unit_name
     atomic(file, content)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
@@ -428,3 +436,11 @@ def manage(action, paths=None):
         start(paths)
     else:
         {"start": start, "stop": stop}[action](paths)
+
+
+def unit_quote(value):
+    return (
+        '"'
+        + str(value).replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+        + '"'
+    )

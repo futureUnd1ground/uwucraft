@@ -44,6 +44,9 @@ class CreateOptions:
     max_players: int = 20
     accept_eula: bool = False
     start: bool = True
+    # Offline ("pirate") setups are exposed to forged account names; an
+    # optional whitelist narrows who can join. Never forced, only offered.
+    whitelist: bool = False
 
     def validate(self):
         validate_name(self.name)
@@ -83,18 +86,19 @@ def dependencies():
             return [
                 "Установите iproute2: команда ip необходима для определения маршрутизатора."
             ]
+        from . import privilege
+
+        # sudo itself asks for the password when the cache is empty, so the
+        # wizard does not need a manual `sudo -v` restart; pkexec is the
+        # graphical fallback. uwucraft never sees the password.
+        problem = privilege.ensure_interactive("установка iproute2")
+        if problem:
+            return [problem]
         try:
             result = subprocess.run(
-                [
-                    "sudo",
-                    "-n",
-                    "--",
-                    "pacman",
-                    "-S",
-                    "--needed",
-                    "--noconfirm",
-                    "iproute2",
-                ],
+                privilege.elevated(
+                    ["pacman", "-S", "--needed", "--noconfirm", "iproute2"]
+                ),
                 capture_output=True,
                 timeout=300,
             )
@@ -132,7 +136,8 @@ def create(options, paths=None, progress=None):
         offline_mode=not options.online_mode,
         name=options.name,
         max_players=options.max_players,
-        whitelist=False,
+        whitelist=options.whitelist,
+        progress=progress,
     )
     # No automatic op accounts: offline users cannot impersonate an administrator
     # before the owner has registered one.
@@ -163,6 +168,13 @@ def create(options, paths=None, progress=None):
         deployment.start_server(paths)
     report = deployment.configure(paths, progress)
     report["errors"].extend(dependency_errors)
+    if not options.online_mode:
+        # Shown once, briefly: offline mode trusts any nickname.
+        report["warnings"].append(
+            "online-mode=false: владение аккаунтом не проверяется, ник можно подделать. "
+            "На публичном сервере включите whitelist"
+            + (" (уже включён)." if options.whitelist else ": uwucraft whitelist on.")
+        )
     if warning:
         report["errors"].append(warning)
     if migration_error:

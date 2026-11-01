@@ -1,6 +1,7 @@
 """The TUI collects the same CreateOptions consumed by the CLI."""
 
 import asyncio
+import time
 
 from textual import on, work
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -12,6 +13,12 @@ from .config import Error
 from .creation import CreateOptions, create, suggested_memory
 from .installers import LOADERS
 from .platforms import windows
+
+
+def _sudo_ready():
+    from . import privilege
+
+    return privilege.sudo_cached()
 
 
 class CreateServer(ModalScreen):
@@ -30,11 +37,17 @@ class CreateServer(ModalScreen):
     #create-actions { height: 3; }
     """
 
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
     def __init__(self, paths):
         super().__init__()
         self.paths = paths
         self.creating = False
         self.report = None
+        self._progress_text = ""
+        self._pulse_timer = None
+        self._started_at = 0.0
+        self._pulse_frame = 0
         from .profiles import suggested_port
 
         try:
@@ -107,13 +120,17 @@ class CreateServer(ModalScreen):
                 "Принимаю Minecraft EULA: https://aka.ms/MinecraftEULA",
                 id="create-eula",
             )
+            yield Checkbox(
+                "Включить whitelist (рекомендуется для режима «пиратка»)",
+                id="create-whitelist",
+            )
             yield Static(
                 (
                     "Windows: брандмауэр запросит UAC; автозапуск — после входа пользователя.\n"
                     if windows()
-                    else "Для изменения nftables нужны права администратора (sudo -v перед TUI).\n"
+                    else "Для firewall/зависимостей sudo запросит пароль сам в начале установки; программа не перезапускается.\n"
                 )
-                + "Режим «пиратка» не проверяет владение аккаунтом; на Paper/Purpur устанавливается AuthMe.",
+                + "Режим «пиратка» не проверяет владение аккаунтом; на Paper/Purpur устанавливается AuthMe. Включите whitelist.",
                 id="create-note",
             )
             yield Static("", id="create-progress", markup=False)
@@ -131,9 +148,33 @@ class CreateServer(ModalScreen):
         self.query_one("#create-copy").display = False
 
     def progress(self, message):
+        self._progress_text = message
         self.app.call_from_thread(
             lambda: self.query_one("#create-progress", Static).update(message)
         )
+
+    def _start_pulse(self):
+        self._started_at = time.monotonic()
+        self._pulse_timer = self.set_interval(0.15, self._pulse)
+
+    def _stop_pulse(self):
+        if self._pulse_timer is not None:
+            self._pulse_timer.stop()
+            self._pulse_timer = None
+
+    def _pulse(self):
+        # Long downloads (Java runtime, server jar) report bytes through
+        # progress(); everything else still gets a heartbeat plus elapsed time
+        # so a quiet step never looks frozen.
+        if not self.creating:
+            return
+        self._pulse_frame = (self._pulse_frame + 1) % len(self.FRAMES)
+        elapsed = int(time.monotonic() - self._started_at)
+        text = f"{self._progress_text}  {self.FRAMES[self._pulse_frame]}  · {elapsed} с"
+        try:
+            self.query_one("#create-progress", Static).update(text)
+        except Exception:
+            self._stop_pulse()
 
     @on(Button.Pressed, "#create-submit")
     def submit(self):
@@ -150,6 +191,7 @@ class CreateServer(ModalScreen):
                 max_players=int(self.query_one("#create-players", Input).value),
                 accept_eula=self.query_one("#create-eula", Checkbox).value,
                 start=True,
+                whitelist=self.query_one("#create-whitelist", Checkbox).value,
             )
             options.validate()
         except (Error, ValueError) as exc:
@@ -165,6 +207,22 @@ class CreateServer(ModalScreen):
 
     @work(group="create")
     async def run_create(self, options):
+        if not windows() and not options.online_mode:
+            # Brief, one-time risk note; the install is not blocked by it.
+            self.query_one("#create-progress", Static).update(
+                "Режим без проверки лицензии: ник можно подделать; для публичного сервера включите whitelist."
+            )
+        if not windows() and not _sudo_ready():
+            # Suspend the TUI so sudo itself can draw its password prompt;
+            # uwucraft never reads or stores the password.
+            from . import privilege
+
+            problem = privilege.ensure_via_system(
+                self.app, "установка зависимостей и firewall"
+            )
+            if problem:
+                self.query_one("#create-errors", Static).update(problem)
+        self._start_pulse()
         try:
             self.report = await asyncio.to_thread(
                 create, options, self.paths, self.progress
@@ -182,7 +240,9 @@ class CreateServer(ModalScreen):
                 else "Доступность извне НЕ подтверждена."
             )
             self.query_one("#create-address", Static).update(
-                address or "Публичный IPv4 не определён"
+                address
+                if self.report["verified"]
+                else "Публичный адрес для игроков пока недоступен"
             )
             self.query_one("#create-address").display = True
             self.query_one("#create-errors", Static).update(
@@ -190,7 +250,7 @@ class CreateServer(ModalScreen):
             )
             button = self.query_one("#create-copy", Button)
             button.display = True
-            button.disabled = not bool(address)
+            button.disabled = not (bool(address) and self.report["verified"])
         except Exception as exc:
             self.query_one("#create-errors", Static).update(
                 str(exc)
@@ -203,12 +263,13 @@ class CreateServer(ModalScreen):
             if self.query("#create-versions"):
                 self.query_one("#create-versions", Button).disabled = False
         finally:
+            self._stop_pulse()
             self.creating = False
             self.query_one("#create-close", Button).disabled = False
 
     @on(Button.Pressed, "#create-copy")
     def copy_address(self):
-        if self.report and self.report["address"]:
+        if self.report and self.report["address"] and self.report["verified"]:
             self.copy_result(self.report["address"])
 
     @work(group="copy")

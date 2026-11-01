@@ -183,15 +183,25 @@ def configure(port):
         if active.returncode != 0:
             return {"state": "inactive", "chains": 0}
     command = [sys.executable, str(Path(__file__).resolve()), "--port", str(port)]
+    attempts = []
     if os.geteuid() != 0:
-        command = ["sudo", "-n", "--"] + command
-    result = run(command)
-    if result.returncode:
-        raise FirewallError(
-            "Не удалось автоматически настроить nftables. Выполните sudo -v и повторите uwucraft network configure. "
-            + result.stderr.strip()[:500]
-        )
-    return json.loads(result.stdout)
+        # sudo -n first (no hidden prompt); pkexec falls back to the system
+        # authentication agent when sudo has no cached credentials.
+        attempts.append(["sudo", "-n", "--"] + command)
+        if shutil.which("pkexec"):
+            attempts.append(["pkexec"] + command)
+    else:
+        attempts.append(command)
+    result = None
+    for candidate in attempts:
+        result = run(candidate)
+        if not result.returncode:
+            return json.loads(result.stdout)
+    raise FirewallError(
+        "Не удалось автоматически настроить nftables. Выполните sudo -v и повторите uwucraft network configure "
+        "(пароль запрашивает sudo/pkexec). "
+        + (result.stderr.strip()[:500] if result else "")
+    )
 
 
 if __name__ == "__main__":

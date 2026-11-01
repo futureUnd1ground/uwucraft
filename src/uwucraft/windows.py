@@ -235,7 +235,7 @@ def run(paths):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("kind", choices=["server", "network", "backup"])
+    parser.add_argument("kind", choices=["server", "network", "backup", "relay"])
     parser.add_argument("--config", required=True)
     parser.add_argument("--data", required=True)
     parser.add_argument("--profile", default="default")
@@ -252,6 +252,10 @@ def main():
     ):
         if options.kind == "server":
             run(paths)
+        elif options.kind == "relay":
+            from .relay import run as relay_run
+
+            relay_run(paths)
         elif options.kind == "network":
             from .portmap import maintain
 

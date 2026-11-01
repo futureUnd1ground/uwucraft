@@ -55,7 +55,7 @@ def test_windows_java_zip_and_cache(paths, monkeypatch):
             }
         ]
 
-    def download(url, target, hashes):
+    def download(url, target, hashes, *args, **kwargs):
         assert hashes == {"sha256": "a" * 64}
         with zipfile.ZipFile(target, "w") as file:
             file.writestr("jdk-21/bin/java.exe", b"test fixture, not an executable")
