@@ -56,6 +56,12 @@ jobs:
       - name: Install with existing Python
         if: matrix.python != '3.14'
         run: ./install.ps1
+      - name: Stage bundled Python payload and build Windows ZIP
+        if: matrix.python == '3.14'
+        run: |
+          $manifest = Get-Content vendor/python-runtime.json -Raw | ConvertFrom-Json
+          Invoke-WebRequest -Uri $manifest.url -OutFile vendor/python-installer.exe
+          python scripts/package_windows.py --python-installer vendor/python-installer.exe
       - name: Bootstrap signed official Python and install uwucraft
         if: matrix.python == '3.14'
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./install.ps1 -BootstrapPython
