@@ -1,0 +1,13 @@
+# ~/.config/uwucraft/themes/my-theme.toml
+# uwucraft tui --theme my-theme
+# Inherit terminal's 256-color approximation automatically through Rich/Textual.
+dark = true
+[colors]
+accent = "#c4a7e7"
+background = "#0f111a"
+surface = "#191c28"
+success = "#a6da95"
+warning = "#eed49f"
+error = "#ed8796"
+info = "#91d7e3"
+muted = "#a5adcb"
