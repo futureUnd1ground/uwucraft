@@ -4,7 +4,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 import zipfile
 from pathlib import Path
@@ -137,18 +136,11 @@ def test_windows_clipboard_dispatch(monkeypatch):
 
 
 @native
-def test_native_windows_locks_unicode_and_cli(paths):
+def test_native_windows_locks_unicode(paths):
     paths.save(Config(name="Мой сервер"))
     assert paths.load().name == "Мой сервер"
     with paths.lock(), pytest.raises(Error), paths.lock():
         pass
-    result = subprocess.run(
-        [sys.executable, "-m", "uwucraft.cli", "--help"],
-        capture_output=True,
-        timeout=20,
-    )
-    # cli module has no __main__; console entrypoint tested by CI as well.
-    assert result.returncode == 0
 
 
 @native
@@ -176,8 +168,7 @@ def test_native_task_registration(paths):
         )
 
 
-@native
-def test_native_supervisor_console_crash_restart_and_stop(paths):
+def prepare_jvm_fixture(paths):
     """A tiny real JVM fixture tests lifecycle, not Minecraft gameplay/readiness."""
     if not shutil.which("javac") or not shutil.which("jar"):
         pytest.skip("JDK needed for supervisor integration fixture")
@@ -218,6 +209,11 @@ public class Fixture {
     )
     paths.save(Config(java=shutil.which("java"), memory="512M"))
     atomic(paths.server / "eula.txt", "eula=true\n")
+
+
+@native
+def test_native_supervisor_console_crash_restart_and_stop(paths):
+    prepare_jvm_fixture(paths)
     try:
         server.start(paths)
         server.wait_ready(paths, timeout=30)
@@ -293,6 +289,7 @@ def test_native_official_paper_server(paths):
         pytest.skip("explicit real Minecraft integration opt-in")
     from uwucraft import installers
 
+    paths = Paths(profile="paper-1214")
     installers.install(
         "paper",
         "1.21.4",
@@ -335,3 +332,30 @@ def test_native_java_unicode_path_reports_unsupported_volume(paths):
         assert short.isascii() and Path(short).samefile(file)
     except Error as exc:
         assert "8.3" in str(exc) and "XDG_DATA_HOME" in str(exc)
+
+
+@native
+def test_native_profiles_run_independently(paths):
+    first = Paths(profile="old-java")
+    second = Paths(profile="new-java")
+    prepare_jvm_fixture(first)
+    second.server.mkdir(parents=True)
+    shutil.copy2(first.server / "server.jar", second.server / "server.jar")
+    second.save(Config(java=shutil.which("java"), memory="512M", port=25566))
+    atomic(second.server / "eula.txt", "eula=true\n")
+    try:
+        server.start(first)
+        server.wait_ready(first, timeout=30)
+        server.start(second)
+        server.wait_ready(second, timeout=30)
+        assert server.status(first)["pid"] != server.status(second)["pid"]
+        server.command("first only", first)
+        server.command("second only", second)
+        server.stop(first)
+        windows.wait_watchdog(first)
+        assert server.status(second)["status"] == "Running"
+        server.command("still running", second)
+    finally:
+        for profile in [first, second]:
+            server.stop(profile)
+            windows.wait_watchdog(profile)

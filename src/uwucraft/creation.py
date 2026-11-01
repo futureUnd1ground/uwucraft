@@ -78,15 +78,6 @@ def dependencies():
         return []
     if not shutil.which("systemctl") or not shutil.which("loginctl"):
         raise Error("Нужна система с работающим systemd и пользовательской сессией.")
-    active = subprocess.run(
-        ["systemctl", "--user", "is-active", "--quiet", "uwucraft.service"],
-        capture_output=True,
-        timeout=15,
-    )
-    if active.returncode == 0:
-        raise Error(
-            "Для этого Linux-аккаунта уже работает uwucraft.service. Используйте другой Linux-аккаунт; активный сервис не изменён."
-        )
     if not shutil.which("ip"):
         if not shutil.which("pacman"):
             return [
@@ -123,7 +114,7 @@ def create(options, paths=None, progress=None):
     options.validate()
     if paths.file.exists() or (paths.server.exists() and any(paths.server.iterdir())):
         raise Error(
-            "Сервер уже существует и сохранён. Для повторной настройки публичного доступа: uwucraft network configure. Для другой установки используйте отдельные XDG-каталоги."
+            "Сервер уже существует и сохранён. Для повторной настройки публичного доступа: uwucraft network configure. Для другого сервера используйте uwucraft --profile ИМЯ create."
         )
     options.memory = options.memory or suggested_memory()
     progress("Проверка зависимостей и доступных ресурсов")

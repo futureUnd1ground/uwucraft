@@ -156,7 +156,9 @@ def test_dead_running_process_is_crashed(paths):
 
 def test_whitelist_positional_player(paths, monkeypatch):
     received = []
-    monkeypatch.setattr(server, "command", lambda text: received.append(text))
+    monkeypatch.setattr(
+        server, "command", lambda text, paths=None: received.append(text)
+    )
     result = CliRunner().invoke(app, ["whitelist", "add", "ExamplePlayer"])
     assert result.exit_code == 0
     assert received == ["whitelist add ExamplePlayer"]

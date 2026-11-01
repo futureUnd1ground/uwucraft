@@ -54,7 +54,7 @@ class Config:
 
 
 class Paths:
-    def __init__(self):
+    def __init__(self, profile=None):
         config_home = (
             Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
             if windows()
@@ -65,13 +65,61 @@ class Paths:
             if windows()
             else Path.home() / ".local/share"
         )
-        self.config = Path(os.environ.get("XDG_CONFIG_HOME", config_home)) / "uwucraft"
-        self.data = Path(os.environ.get("XDG_DATA_HOME", data_home)) / "uwucraft"
+        self.root_config = (
+            Path(os.environ.get("XDG_CONFIG_HOME", config_home)) / "uwucraft"
+        )
+        self.root_data = Path(os.environ.get("XDG_DATA_HOME", data_home)) / "uwucraft"
+        selected = self.root_config / "active-profile"
+        profile = (
+            profile
+            or os.environ.get("UWUCRAFT_PROFILE")
+            or (
+                selected.read_text(encoding="utf-8").strip()
+                if selected.exists()
+                else "default"
+            )
+        )
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", profile):
+            raise Error("ID профиля: 1–40 строчных латинских букв, цифр, _ или -.")
+        self.profile = profile
+        self.config = (
+            self.root_config
+            if profile == "default"
+            else self.root_config / "profiles" / profile
+        )
+        self.data = (
+            self.root_data
+            if profile == "default"
+            else self.root_data / "profiles" / profile
+        )
         self.server = self.data / "server"
         self.backups = self.data / "backups"
         self.file = self.config / "config.toml"
         self.socket = self.data / "console.sock"
         self.state = self.data / "state.json"
+
+    @property
+    def unit_name(self):
+        return (
+            "uwucraft.service"
+            if self.profile == "default"
+            else f"uwucraft-server@{self.profile}.service"
+        )
+
+    @property
+    def network_unit_name(self):
+        return (
+            "uwucraft-network.service"
+            if self.profile == "default"
+            else f"uwucraft-network@{self.profile}.service"
+        )
+
+    def environment(self):
+        return {
+            "XDG_CONFIG_HOME": str(self.root_config.parent),
+            "XDG_DATA_HOME": str(self.root_data.parent),
+            "UWUCRAFT_PROFILE": self.profile,
+        }
 
     def load(self):
         if not self.file.exists():

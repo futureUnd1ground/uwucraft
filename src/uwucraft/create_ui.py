@@ -34,6 +34,12 @@ class CreateServer(ModalScreen):
         self.paths = paths
         self.creating = False
         self.report = None
+        from .profiles import suggested_port
+
+        try:
+            self.port = suggested_port()
+        except Error:
+            self.port = 25565
 
     def compose(self):
         try:
@@ -80,7 +86,7 @@ class CreateServer(ModalScreen):
                     ),
                     (
                         "TCP-порт",
-                        Input(value="25565", type="integer", id="create-port"),
+                        Input(value=str(self.port), type="integer", id="create-port"),
                     ),
                     (
                         "Количество игроков",
@@ -111,6 +117,7 @@ class CreateServer(ModalScreen):
             )
             with Horizontal(id="create-actions"):
                 yield Button("Создать сервер", id="create-submit", variant="primary")
+                yield Button("Версии", id="create-versions")
                 yield Button("Закрыть", id="create-close")
 
     def on_mount(self):
@@ -145,6 +152,7 @@ class CreateServer(ModalScreen):
         self.creating = True
         self.query_one("#create-submit", Button).disabled = True
         self.query_one("#create-close", Button).disabled = True
+        self.query_one("#create-versions", Button).disabled = True
         for widget in self.query("Input, Select, Checkbox"):
             widget.disabled = True
         self.run_create(options)
@@ -159,6 +167,9 @@ class CreateServer(ModalScreen):
             self.query_one("#create-note").display = False
             self.query_one("#create-eula").display = False
             self.query_one("#create-submit").display = False
+            self.query_one("#create-versions").display = False
+            if hasattr(self.app, "select_profile") and self.paths.file.exists():
+                await self.app.select_profile(self.paths.profile)
             address = self.report["address"]
             self.query_one("#create-progress", Static).update(
                 "Внешний вход Minecraft подтверждён."
@@ -184,6 +195,7 @@ class CreateServer(ModalScreen):
             for widget in self.query("Input, Select, Checkbox"):
                 widget.disabled = False
             self.query_one("#create-submit", Button).disabled = False
+            self.query_one("#create-versions", Button).disabled = False
         finally:
             self.creating = False
             self.query_one("#create-close", Button).disabled = False
@@ -204,3 +216,15 @@ class CreateServer(ModalScreen):
     def close(self):
         if not self.creating:
             self.dismiss()
+
+    @on(Button.Pressed, "#create-versions")
+    def versions(self):
+        from .version_ui import VersionPicker
+
+        def selected(version):
+            if version:
+                self.query_one("#create-version", Input).value = version
+
+        self.app.push_screen(
+            VersionPicker(self.query_one("#create-loader", Select).value), selected
+        )

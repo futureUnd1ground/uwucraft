@@ -1,36 +1,73 @@
-# Install from a downloaded/extracted checkout. No WSL, Docker or global Java needed.
+# Native Windows installer. Release ZIP includes the signed official Python installer.
 [CmdletBinding()]
-param()
+param([switch]$BootstrapPython)
 $ErrorActionPreference = 'Stop'
+$target = Join-Path $env:LOCALAPPDATA 'uwucraft-app'
+
+function Test-Python([string]$Executable) {
+    if (!$Executable -or !(Test-Path $Executable)) { return $false }
+    try {
+        & $Executable -c 'import sys, venv; sys.exit(0 if sys.version_info >= (3,11,8) and sys.maxsize > 2**32 else 1)' 2>$null
+        return $LASTEXITCODE -eq 0
+    } catch { return $false }
+}
 
 function Find-Python {
-    $candidates = @()
-    if (Get-Command py -ErrorAction SilentlyContinue) {
-        $candidates += (& py -3 -c 'import sys; print(sys.executable)' 2>$null)
-    }
-    if (Get-Command python -ErrorAction SilentlyContinue) {
-        $candidates += (& python -c 'import sys; print(sys.executable)' 2>$null)
-    }
-    $candidates += "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
-    foreach ($candidate in $candidates) {
-        if ($candidate -and (Test-Path $candidate)) {
-            & $candidate -c 'import sys; sys.exit(0 if sys.version_info >= (3,11,8) else 1)'
-            if ($LASTEXITCODE -eq 0) { return $candidate }
+    $candidates = @((Join-Path $target 'python\python.exe'))
+    foreach ($command in @('py', 'python')) {
+        if (Get-Command $command -ErrorAction SilentlyContinue) {
+            try {
+                $arguments = @('-c', 'import sys; print(sys.executable)')
+                if ($command -eq 'py') { $arguments = @('-3') + $arguments }
+                $candidates += (& $command @arguments 2>$null)
+            } catch { }
         }
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Python $candidate) { return $candidate }
     }
     return $null
 }
 
-$python = Find-Python
-if (!$python) {
-    if (!(Get-Command winget -ErrorAction SilentlyContinue)) {
-        throw 'Install Python 3.11.8+ from python.org (enable Python Launcher), then rerun install.ps1.'
+function Install-Python {
+    if (![Environment]::Is64BitOperatingSystem) { throw 'uwucraft requires 64-bit Windows 10/11.' }
+    $home = Join-Path $target 'python'
+    $executable = Join-Path $home 'python.exe'
+    if (Test-Python $executable) { return $executable }
+    $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'vendor\python-runtime.json') -Raw | ConvertFrom-Json
+    $installer = Join-Path $PSScriptRoot 'vendor\python-installer.exe'
+    $temporary = $null
+    try {
+        if (!(Test-Path $installer)) {
+            $temporary = Join-Path ([IO.Path]::GetTempPath()) ('uwucraft-python-' + [guid]::NewGuid().ToString('N'))
+            New-Item -ItemType Directory -Path $temporary | Out-Null
+            $installer = Join-Path $temporary 'python-installer.exe'
+            if ($manifest.url -notmatch '^https://www\.python\.org/ftp/python/') { throw 'Invalid Python source.' }
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Write-Host ('Downloading official Python ' + $manifest.version)
+            Invoke-WebRequest -UseBasicParsing -Uri $manifest.url -OutFile $installer -TimeoutSec 300
+        }
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash -ne $manifest.sha256) {
+            throw 'Python installer SHA-256 mismatch. File rejected.'
+        }
+        $signature = Get-AuthenticodeSignature -LiteralPath $installer
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(?:CN|O)=Python Software Foundation(?:,|$)') {
+            throw 'Python Software Foundation signature is not valid. File rejected.'
+        }
+        Write-Host ('Installing Python ' + $manifest.version + ' for uwucraft (current user).')
+        $arguments = @('/quiet', 'InstallAllUsers=0', ('TargetDir="' + $home + '"'), 'Include_launcher=0', 'Include_test=0', 'Include_pip=1', 'PrependPath=0', 'Shortcuts=0', 'AssociateFiles=0')
+        $process = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+        if ($process.ExitCode -notin @(0, 3010) -or !(Test-Python $executable)) {
+            throw ('Python installation failed. Exit code: ' + $process.ExitCode)
+        }
+        return $executable
+    } finally {
+        if ($temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force }
     }
-    & winget install --id Python.Python.3.12 --exact --scope user --silent --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) { throw 'Python installation failed.' }
-    $python = Find-Python
-    if (!$python) { throw 'Python was not found. Reopen PowerShell and rerun install.ps1.' }
 }
+
+$python = if ($BootstrapPython) { $null } else { Find-Python }
+if (!$python) { $python = Install-Python }
 
 $target = Join-Path $env:LOCALAPPDATA 'uwucraft-app'
 $venv = Join-Path $target 'venv'

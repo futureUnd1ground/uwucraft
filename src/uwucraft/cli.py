@@ -1,6 +1,5 @@
 import os
 import subprocess
-import time
 from pathlib import Path
 from typing import Annotated
 
@@ -16,6 +15,8 @@ app = typer.Typer(
     no_args_is_help=False, help="uwucraft · A quiet home for your Minecraft server."
 )
 mod = typer.Typer(help="Совместимый серверный контент Modrinth.")
+profile_app = typer.Typer(help="Отдельные серверы, миры и версии Minecraft.")
+app.add_typer(profile_app, name="profile")
 net = typer.Typer(help="Адреса и честная диагностика сети.")
 app.add_typer(mod, name="mod")
 app.add_typer(net, name="network")
@@ -23,7 +24,27 @@ console = Console(no_color="NO_COLOR" in os.environ)
 
 
 @app.callback(invoke_without_command=True)
-def entry(ctx: typer.Context):
+def entry(
+    ctx: typer.Context,
+    profile: Annotated[
+        str,
+        typer.Option(
+            "--profile", "-p", help="ID сервера; по умолчанию выбранный профиль."
+        ),
+    ] = "",
+):
+    if profile:
+        Paths(profile=profile)  # validate before any mutation
+        previous = os.environ.get("UWUCRAFT_PROFILE")
+        os.environ["UWUCRAFT_PROFILE"] = profile
+
+        def restore():
+            if previous is None:
+                os.environ.pop("UWUCRAFT_PROFILE", None)
+            else:
+                os.environ["UWUCRAFT_PROFILE"] = previous
+
+        ctx.call_on_close(restore)
     if ctx.invoked_subcommand is None:
         tui()
 
@@ -64,7 +85,7 @@ def create_command(
     loader: str = "",
     mode: str = "",
     memory: str = "",
-    port: int = 25565,
+    port: int | None = None,
     max_players: int = 20,
     accept_eula: bool = False,
     start: bool = True,
@@ -73,6 +94,10 @@ def create_command(
     """Создать сервер: краткий мастер или --quick без вопросов."""
     from .creation import CreateOptions, create, suggested_memory
 
+    if port is None:
+        from .profiles import suggested_port
+
+        port = suggested_port()
     if not quick:
         name = name or typer.prompt("Название", default="My Minecraft server")
         loader = loader or typer.prompt(
@@ -161,23 +186,7 @@ def stop():
 
 
 def _lifecycle(action):
-    unit = Path.home() / ".config/systemd/user/uwucraft.service"
-    if unit.exists() and not windows():
-        subprocess.run(["systemctl", "--user", action, "uwucraft.service"], check=True)
-        if action in {"start", "restart"}:
-            for _ in range(100):
-                if server.status()["status"] in {"Starting", "Running"}:
-                    break
-                time.sleep(0.1)
-            else:
-                raise Error(
-                    "Supervisor не запустился. Проверьте journalctl --user -u uwucraft.service."
-                )
-    elif action == "restart":
-        server.stop()
-        server.start()
-    else:
-        getattr(server, action)()
+    server.manage(action)
 
 
 @app.command()
@@ -374,7 +383,7 @@ def ops(action: str, player: str):
     _player_command("op" if action == "add" else "deop", "", player, {""})
 
 
-def _player_command(prefix, action, player, allowed):
+def _player_command(prefix, action, player, allowed, paths=None):
     import re
 
     if action not in allowed or (
@@ -383,16 +392,14 @@ def _player_command(prefix, action, player, allowed):
         raise Error("Недопустимое действие или имя Minecraft.")
     if action in {"add", "remove", ""} and not player:
         raise Error("Укажите имя игрока.")
-    server.command(" ".join(x for x in [prefix, action, player] if x))
+    server.command(" ".join(x for x in [prefix, action, player] if x), paths)
 
 
 @app.command("service")
 def service_install(enable: bool = False):
     console.print(str(server.unit()))
     if enable and not windows():
-        subprocess.run(
-            ["systemctl", "--user", "enable", "uwucraft.service"], check=True
-        )
+        subprocess.run(["systemctl", "--user", "enable", Paths().unit_name], check=True)
 
 
 @app.command("backup-schedule")
@@ -416,17 +423,25 @@ def backup_schedule(calendar: str = "daily"):
     home = Path.home() / ".config/systemd/user"
     python = sys.executable.replace("%", "%%")
     paths = Paths()
-    atomic(
-        home / "uwucraft-backup.service",
-        f'[Unit]\nDescription=uwucraft consistent backup\n[Service]\nType=oneshot\nExecStart="{python}" -m uwucraft.scheduled\nEnvironment="XDG_CONFIG_HOME={paths.config.parent}"\nEnvironment="XDG_DATA_HOME={paths.data.parent}"\n',
+    unit_name = (
+        "uwucraft-backup"
+        if paths.profile == "default"
+        else "uwucraft-backup@" + paths.profile
+    )
+    environment = "".join(
+        f'Environment="{key}={value}"\n' for key, value in paths.environment().items()
     )
     atomic(
-        home / "uwucraft-backup.timer",
+        home / (unit_name + ".service"),
+        f'[Unit]\nDescription=uwucraft consistent backup\n[Service]\nType=oneshot\nExecStart="{python}" -m uwucraft.scheduled\n{environment}',
+    )
+    atomic(
+        home / (unit_name + ".timer"),
         f"[Unit]\nDescription=uwucraft backup timer\n[Timer]\nOnCalendar={calendar}\nPersistent=true\n[Install]\nWantedBy=timers.target\n",
     )
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run(
-        ["systemctl", "--user", "enable", "--now", "uwucraft-backup.timer"], check=True
+        ["systemctl", "--user", "enable", "--now", unit_name + ".timer"], check=True
     )
     console.print("Timer включён. Бэкап временно останавливает сервер.")
 
@@ -561,8 +576,39 @@ def mod_search(query: str, kind: str = "mod"):
 
 
 @app.command("compat-setup")
-def compat_setup():
+def compat_setup(restart: bool = False, legacy_clients: bool = False):
     """Установить ViaVersion + ViaBackwards из официальных релизов с SHA-256."""
-    from .compat import install
+    from .compat import setup
 
-    console.print(install())
+    console.print(setup(restart=restart, legacy=legacy_clients))
+
+
+@profile_app.command("list")
+def profile_list():
+    from .profiles import listing
+
+    active = Paths().profile
+    for paths in listing():
+        c = paths.load()
+        console.print(
+            f"{'*' if paths.profile == active else ' '} {paths.profile} | {c.name} | {c.loader} {c.version or 'не установлен'} | TCP {c.port} | {server.status(paths)['status']}",
+            markup=False,
+        )
+
+
+@profile_app.command("use")
+def profile_use(identifier: Annotated[str, typer.Argument()]):
+    from .profiles import select
+
+    console.print("Выбран профиль: " + select(identifier).profile)
+
+
+@app.command("versions")
+def versions_command(loader: str = "paper", limit: int = 30, snapshots: bool = False):
+    from .sources import available_versions
+
+    if not 1 <= limit <= 500:
+        raise Error("limit: 1–500.")
+    console.print(
+        "\n".join(available_versions(loader, snapshots=snapshots)[:limit]), markup=False
+    )

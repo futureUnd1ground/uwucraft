@@ -123,9 +123,11 @@ def task(paths, kind="server", start=False, daily=False):
             "uwucraft.windows",
             kind,
             "--config",
-            str(paths.config.parent),
+            str(paths.root_config.parent),
             "--data",
-            str(paths.data.parent),
+            str(paths.root_data.parent),
+            "--profile",
+            paths.profile,
         ]
     )
     name = task_name(paths, kind)
@@ -236,9 +238,11 @@ def main():
     parser.add_argument("kind", choices=["server", "network", "backup"])
     parser.add_argument("--config", required=True)
     parser.add_argument("--data", required=True)
+    parser.add_argument("--profile", default="default")
     options = parser.parse_args()
     os.environ["XDG_CONFIG_HOME"] = options.config
     os.environ["XDG_DATA_HOME"] = options.data
+    os.environ["UWUCRAFT_PROFILE"] = options.profile
     paths = Paths()
     paths.data.mkdir(parents=True, exist_ok=True)
     with (

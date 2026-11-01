@@ -10,7 +10,7 @@ import psutil
 
 from .config import Config, Error, Paths, atomic, memory_mb
 from .platforms import os_name, windows
-from .sources import download, get, metadata, minecraft, resolve
+from .sources import download, get, metadata, minecraft, neoforge_prefix, resolve
 
 LOADERS = ["vanilla", "paper", "purpur", "fabric", "forge", "neoforge"]
 
@@ -38,7 +38,7 @@ def preflight(paths, memory, port):
     }
 
 
-def java_for(required, install=False, local_runtime=False):
+def java_for(required, install=False, local_runtime=False, paths=None):
     candidates = [
         f"/usr/lib/jvm/java-{required}-openjdk/bin/java",
         shutil.which("java") or "java",
@@ -60,7 +60,7 @@ def java_for(required, install=False, local_runtime=False):
     if local_runtime:
         from .runtime import provision
 
-        return provision(required)
+        return provision(required, paths)
     package = (
         f"jre{required}-openjdk-headless" if required != 8 else "jre8-openjdk-headless"
     )
@@ -94,16 +94,7 @@ def forge_artifact(loader, version):
         if "beta" not in x.text
     ]
     for build in reversed(candidates):
-        if version.startswith("1.20."):
-            prefix = "20." + version.split(".")[2] + "."
-        elif version.startswith("1.21"):
-            prefix = (
-                "21."
-                + (version.split(".")[2] if len(version.split(".")) > 2 else "0")
-                + "."
-            )
-        else:
-            prefix = version + "."
+        prefix = neoforge_prefix(version)
         if build.startswith(prefix):
             return f"{base}/{build}/neoforge-{build}-installer.jar"
     raise Error(
@@ -151,7 +142,7 @@ def install(
         preflight(paths, memory, port)
         version, info = minecraft(version)
         required = info.get("javaVersion", {}).get("majorVersion", 8)
-        java = java_for(required, install_deps, local_runtime)
+        java = java_for(required, install_deps, local_runtime, paths)
         with tempfile.TemporaryDirectory(dir=paths.data) as directory:
             staging = Path(directory) / "server"
             staging.mkdir()
@@ -171,13 +162,23 @@ def install(
                         stderr=subprocess.STDOUT,
                         timeout=900,
                     )
-                if (
-                    result.returncode
-                    or not (staging / ("run.bat" if windows() else "run.sh")).exists()
-                ):
+                if result.returncode:
                     raise Error(
                         "Installer Forge/NeoForge завершился с ошибкой; установка не применена."
                     )
+                if not (staging / ("run.bat" if windows() else "run.sh")).exists():
+                    legacy = [
+                        p
+                        for p in staging.glob("forge-*.jar")
+                        if not p.name.endswith(
+                            ("-installer.jar", "-sources.jar", "-javadoc.jar")
+                        )
+                    ]
+                    if loader != "forge" or len(legacy) != 1:
+                        raise Error(
+                            "Installer не создал однозначный launcher или run script."
+                        )
+                    legacy[0].rename(staging / "server.jar")
             else:
                 url, hashes, _ = resolve(loader, version)
                 download(url, staging / "server.jar", hashes)

@@ -55,7 +55,7 @@ def enable_renewal(paths):
             + '"'
         )
 
-    unit = Path.home() / ".config/systemd/user/uwucraft-network.service"
+    unit = Path.home() / ".config/systemd/user" / paths.network_unit_name
     atomic(
         unit,
         f"""[Unit]
@@ -64,8 +64,9 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 ExecStart={q(sys.executable)} -m uwucraft.portmap
-Environment={q("XDG_CONFIG_HOME=" + str(paths.config.parent))}
-Environment={q("XDG_DATA_HOME=" + str(paths.data.parent))}
+Environment={q("XDG_CONFIG_HOME=" + str(paths.root_config.parent))}
+Environment={q("XDG_DATA_HOME=" + str(paths.root_data.parent))}
+Environment={q("UWUCRAFT_PROFILE=" + paths.profile)}
 Restart=on-failure
 RestartSec=30
 NoNewPrivileges=true
@@ -200,7 +201,7 @@ def enable_server(paths):
         return ""
     server.unit(paths)
     subprocess.run(
-        ["systemctl", "--user", "enable", "uwucraft.service"], check=True, timeout=15
+        ["systemctl", "--user", "enable", paths.unit_name], check=True, timeout=15
     )
     import getpass
 
@@ -226,7 +227,7 @@ def start_server(paths):
         server.wait_ready(paths)
         return
     subprocess.run(
-        ["systemctl", "--user", "start", "uwucraft.service"], check=True, timeout=30
+        ["systemctl", "--user", "start", paths.unit_name], check=True, timeout=30
     )
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:

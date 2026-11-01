@@ -55,7 +55,15 @@ def create(paths=None, protected=None):
                 archive.add(
                     paths.config,
                     arcname="config",
-                    filter=lambda i: None if i.issym() or i.islnk() else i,
+                    filter=lambda i: (
+                        None
+                        if i.issym()
+                        or i.islnk()
+                        or i.name == "config/active-profile"
+                        or i.name == "config/profiles"
+                        or i.name.startswith("config/profiles/")
+                        else i
+                    ),
                 )
                 archive.add(
                     paths.server,
@@ -137,16 +145,36 @@ def restore(name, paths=None):
             ) as config_stage:
                 new_config = Path(config_stage) / "config"
                 shutil.copytree(staging / "config", new_config)
+                preserved = (
+                    {"profiles", "active-profile"}
+                    if paths.profile == "default"
+                    else set()
+                )
+                # Never move the root config directory: it also contains other
+                # profiles. Replace this profile's entries, with rollback.
+                old_config.mkdir()
                 paths.server.rename(old)
+                installed = []
+                moved = []
                 try:
-                    paths.config.rename(old_config)
+                    for entry in paths.config.iterdir():
+                        if entry.name not in preserved:
+                            entry.rename(old_config / entry.name)
+                            moved.append(entry.name)
                     (staging / "server").rename(paths.server)
-                    new_config.rename(paths.config)
+                    for entry in new_config.iterdir():
+                        if entry.name not in preserved:
+                            entry.rename(paths.config / entry.name)
+                            installed.append(entry.name)
                 except Exception:
-                    if old_config.exists():
-                        if paths.config.exists():
-                            shutil.rmtree(paths.config)
-                        old_config.rename(paths.config)
+                    for name in installed:
+                        entry = paths.config / name
+                        if entry.is_dir():
+                            shutil.rmtree(entry)
+                        else:
+                            entry.unlink(missing_ok=True)
+                    for name in moved:
+                        (old_config / name).rename(paths.config / name)
                     if paths.server.exists():
                         shutil.rmtree(paths.server)
                     old.rename(paths.server)

@@ -111,19 +111,18 @@ def start(paths=None):
                     "uwucraft.windows",
                     "server",
                     "--config",
-                    str(paths.config.parent),
+                    str(paths.root_config.parent),
                     "--data",
-                    str(paths.data.parent),
+                    str(paths.root_data.parent),
+                    "--profile",
+                    paths.profile,
                 ]
                 options = {
                     "creationflags": subprocess.CREATE_NO_WINDOW
                     | subprocess.CREATE_NEW_PROCESS_GROUP
                 }
             env = os.environ.copy()
-            env.update(
-                XDG_CONFIG_HOME=str(paths.config.parent),
-                XDG_DATA_HOME=str(paths.data.parent),
-            )
+            env.update(paths.environment())
             subprocess.Popen(
                 args,
                 stdin=subprocess.DEVNULL,
@@ -198,9 +197,16 @@ def _supervise(paths, config):
     if config.loader in {"forge", "neoforge"}:
         argument_name = "win_args.txt" if windows() else "unix_args.txt"
         argument_files = list((paths.server / "libraries").glob("**/" + argument_name))
-        if len(argument_files) != 1:
+        if len(argument_files) == 1:
+            args += ["@" + str(argument_files[0].relative_to(paths.server)), "nogui"]
+        elif (
+            not argument_files
+            and config.loader == "forge"
+            and (paths.server / "server.jar").exists()
+        ):
+            args += ["-jar", "server.jar", "nogui"]
+        else:
             raise Error(f"Не найден однозначный Forge/NeoForge {argument_name}.")
-        args += ["@" + str(argument_files[0].relative_to(paths.server)), "nogui"]
     else:
         args += ["-jar", "server.jar", "nogui"]
     process = subprocess.Popen(
@@ -361,8 +367,9 @@ StartLimitBurst=5
 [Service]
 Type=simple
 ExecStart={quote(executable)} -m uwucraft.runner
-Environment="XDG_CONFIG_HOME={str(paths.config.parent).replace("%", "%%")}"
-Environment="XDG_DATA_HOME={str(paths.data.parent).replace("%", "%%")}"
+Environment="XDG_CONFIG_HOME={str(paths.root_config.parent).replace("%", "%%")}"
+Environment="XDG_DATA_HOME={str(paths.root_data.parent).replace("%", "%%")}"
+Environment="UWUCRAFT_PROFILE={paths.profile}"
 WorkingDirectory={str(paths.server).replace("%", "%%")}
 Restart=on-failure
 RestartSec=10
@@ -378,7 +385,7 @@ UMask=0077
 [Install]
 WantedBy=default.target
 """
-    file = Path.home() / ".config/systemd/user/uwucraft.service"
+    file = Path.home() / ".config/systemd/user" / paths.unit_name
     atomic(file, content)
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     return file
@@ -395,3 +402,29 @@ def wait_ready(paths=None, timeout=240):
             raise Error("Сервер завершился при запуске. Проверьте uwucraft logs.")
         time.sleep(1)
     raise Error("Не получено подтверждение готовности за 240 секунд; проверьте логи.")
+
+
+def manage(action, paths=None):
+    """One lifecycle authority for CLI, TUI and plugin setup."""
+    paths = paths or Paths()
+    if action not in {"start", "stop", "restart"}:
+        raise Error("Действие: start/stop/restart.")
+    unit_file = Path.home() / ".config/systemd/user" / paths.unit_name
+    if not windows() and unit_file.exists():
+        subprocess.run(
+            ["systemctl", "--user", action, paths.unit_name], check=True, timeout=180
+        )
+        if action in {"start", "restart"}:
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if status(paths)["status"] in {"Starting", "Running"}:
+                    return
+                time.sleep(0.1)
+            raise Error(
+                f"Supervisor не запустился. Проверьте journalctl --user -u {paths.unit_name}."
+            )
+    elif action == "restart":
+        stop(paths)
+        start(paths)
+    else:
+        {"start": start, "stop": stop}[action](paths)

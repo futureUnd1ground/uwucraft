@@ -120,7 +120,6 @@ class Uwucraft(App):
         self.history_index = 0
         self.paused = False
         self.log_snapshot = ""
-        self.address = None
         self.busy = False
         self.last_state = None
         self.last_error = ""
@@ -147,6 +146,17 @@ class Uwucraft(App):
         yield Static("", id="top")
         with Horizontal(id="body"):
             with Vertical(id="sidebar"):
+                from .profiles import listing
+
+                items = listing()
+                if self.paths.profile not in {p.profile for p in items}:
+                    items.append(self.paths)
+                yield Select(
+                    [(p.profile, p.profile) for p in items],
+                    value=self.paths.profile,
+                    allow_blank=False,
+                    id="profile-select",
+                )
                 yield ListView(
                     *[
                         ListItem(Label(f"{index + 1:02}  {name}"), name=name)
@@ -221,6 +231,7 @@ class Uwucraft(App):
                     Button("Stop", id="stop"),
                     Button("Restart", id="restart"),
                     Button("Backup", id="backup"),
+                    Button("Разные клиенты", id="compat-setup"),
                     classes="actions",
                 )
             )
@@ -521,12 +532,15 @@ class Uwucraft(App):
         if server.status(self.paths)["status"] != "Running":
             self.minecraft_metrics = {}
             return
+        paths = self.paths
         try:
-            self.minecraft_metrics = await asyncio.to_thread(
-                network.minecraft_status, "127.0.0.1", self.paths.load().port
+            metrics = await asyncio.to_thread(
+                network.minecraft_status, "127.0.0.1", paths.load().port
             )
         except (Error, OSError, ValueError):
-            self.minecraft_metrics = {}
+            metrics = {}
+        if self.paths.profile == paths.profile:
+            self.minecraft_metrics = metrics
 
     def update_state(self):
         c = self.paths.load()
@@ -683,21 +697,18 @@ class Uwucraft(App):
         await self.confirm_action(message, function)
 
     def action_start(self):
-        from .cli import _lifecycle
-
-        self.perform(lambda: _lifecycle("start"), "Запуск запрошен")
+        self.perform(lambda: server.manage("start", self.paths), "Запуск запрошен")
 
     def action_stop(self):
-        from .cli import _lifecycle
-
-        self.confirm("Сохранить мир и остановить сервер?", lambda: _lifecycle("stop"))
+        self.confirm(
+            "Сохранить мир и остановить сервер?",
+            lambda: server.manage("stop", self.paths),
+        )
 
     def action_restart(self):
-        from .cli import _lifecycle
-
         self.confirm(
             "Перезапустить сервер? Игроки будут отключены.",
-            lambda: _lifecycle("restart"),
+            lambda: server.manage("restart", self.paths),
         )
 
     def action_backup(self):
@@ -705,8 +716,10 @@ class Uwucraft(App):
 
     def action_create(self):
         from .create_ui import CreateServer
+        from .profiles import next_profile
 
-        self.push_screen(CreateServer(self.paths))
+        target = self.paths if not self.paths.file.exists() else next_profile()
+        self.push_screen(CreateServer(target))
 
     def action_copy_address(self):
         self.copy_address("public")
@@ -843,11 +856,15 @@ class Uwucraft(App):
             function = (
                 (
                     lambda: _player_command(
-                        "whitelist", action.split("-")[1], name, {"add", "remove"}
+                        "whitelist",
+                        action.split("-")[1],
+                        name,
+                        {"add", "remove"},
+                        self.paths,
                     )
                 )
                 if action.startswith("whitelist")
-                else (lambda: _player_command(action, "", name, {""}))
+                else (lambda: _player_command(action, "", name, {""}, self.paths))
             )
             if action == "op":
                 self.confirm("Выдать права оператора " + name + "?", function)
@@ -862,3 +879,44 @@ class Uwucraft(App):
                 self.query_one("#content-list", Static).update(text)
         except (Error, OSError, ValueError, KeyError) as error:
             self.notify(str(error), severity="error")
+
+    async def select_profile(self, identifier):
+        from .profiles import listing, select
+
+        self.paths = select(identifier)
+        self.minecraft_metrics = {}
+        self.log_snapshot = ""
+        self.last_error = ""
+        self.last_state = None
+        self.world_bytes = None
+        self.history = []
+        self.history_index = 0
+        picker = self.query_one("#profile-select", Select)
+        with picker.prevent(Select.Changed):
+            picker.set_options([(p.profile, p.profile) for p in listing()])
+            picker.value = identifier
+        await self.render_page()
+        self.update_state()
+
+    @on(Select.Changed, "#profile-select")
+    async def profile_changed(self, event):
+        if event.value == Select.BLANK or event.value == self.paths.profile:
+            return
+        if self.busy:
+            self.notify("Дождитесь текущей операции.", severity="warning")
+            with event.select.prevent(Select.Changed):
+                event.select.value = self.paths.profile
+            return
+        try:
+            await self.select_profile(event.value)
+        except Error as exc:
+            self.notify(str(exc), severity="error")
+
+    @on(Button.Pressed, "#compat-setup")
+    def compatibility(self):
+        from .compat import setup
+
+        self.confirm(
+            "Установить ViaVersion/ViaBackwards? Игроки будут отключены на время резервной копии и перезапуска. Моды не переводятся между версиями.",
+            lambda: setup(self.paths, restart=True),
+        )

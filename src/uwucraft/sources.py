@@ -127,7 +127,11 @@ def resolve(loader, version):
         item = info.get("downloads", {}).get("server")
         if not item:
             raise Error("Для этой версии нет серверного дистрибутива.")
-        return item["url"], {"sha1": item["sha1"]}, info["javaVersion"]["majorVersion"]
+        return (
+            item["url"],
+            {"sha1": item["sha1"]},
+            info.get("javaVersion", {}).get("majorVersion", 8),
+        )
     if loader == "paper":
         builds = metadata(
             f"https://fill.papermc.io/v3/projects/paper/versions/{version}/builds"
@@ -141,14 +145,14 @@ def resolve(loader, version):
         return (
             item["url"],
             item.get("checksums", {}),
-            info["javaVersion"]["majorVersion"],
+            info.get("javaVersion", {}).get("majorVersion", 8),
         )
     if loader == "purpur":
         item = metadata(f"https://api.purpurmc.org/v2/purpur/{version}/latest")
         return (
             f"https://api.purpurmc.org/v2/purpur/{version}/{item['build']}/download",
             {"md5": item["md5"]},
-            info["javaVersion"]["majorVersion"],
+            info.get("javaVersion", {}).get("majorVersion", 8),
         )
     if loader == "fabric":
         loaders = metadata(f"https://meta.fabricmc.net/v2/versions/loader/{version}")
@@ -163,7 +167,7 @@ def resolve(loader, version):
         return (
             f"https://meta.fabricmc.net/v2/versions/loader/{version}/{stable['loader']['version']}/{installer['version']}/server/jar",
             {},
-            info["javaVersion"]["majorVersion"],
+            info.get("javaVersion", {}).get("majorVersion", 8),
         )
     raise Error("Неизвестный загрузчик.")
 
@@ -227,13 +231,67 @@ def latest_compatible(loader):
             if "beta" not in v.text
         ]
         for version in releases:
-            parts = version.split(".")
-            prefix = (
-                ".".join(parts[1:]) if version.startswith("1.") else version
-            ) + "."
-            if len(parts) == 2 and version.startswith("1."):
-                prefix = parts[1] + ".0."
+            prefix = neoforge_prefix(version)
             if any(v.startswith(prefix) for v in listed):
                 return version
         raise Error("Не найдена совместимая стабильная версия NeoForge.")
     return manifest["latest"]["release"]
+
+
+def available_versions(loader, snapshots=False):
+    """Published Minecraft versions from official manifests, newest first.
+
+    A listed core version can still lack a stable build; resolve validates the
+    actual artifact before installation. Snapshot opt-in never becomes default.
+    """
+    if loader not in {"vanilla", "paper", "purpur", "fabric", "forge", "neoforge"}:
+        raise Error("Неизвестное ядро.")
+    manifest = metadata(MANIFEST)
+    versions = [
+        v["id"]
+        for v in manifest["versions"]
+        if v["type"] == "release" or snapshots and v["type"] == "snapshot"
+    ]
+    if loader == "vanilla":
+        return versions
+    if loader == "paper":
+        listed = metadata("https://fill.papermc.io/v3/projects/paper")["versions"]
+        if isinstance(listed, dict):
+            listed = [v for group in listed.values() for v in group]
+    elif loader == "purpur":
+        listed = metadata("https://api.purpurmc.org/v2/purpur")["versions"]
+    elif loader == "fabric":
+        listed = [
+            v["version"]
+            for v in metadata("https://meta.fabricmc.net/v2/versions/game")
+            if v["stable"] or snapshots
+        ]
+    elif loader == "forge":
+        promos = metadata(
+            "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
+        )["promos"]
+        listed = {v.rsplit("-", 1)[0] for v in promos}
+    else:
+        from xml.etree import ElementTree
+
+        root = ElementTree.fromstring(
+            get(
+                "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
+            ).text
+        )
+        builds = [
+            v.text
+            for v in root.findall("./versioning/versions/version")
+            if "beta" not in v.text
+        ]
+        listed = [
+            v for v in versions if any(b.startswith(neoforge_prefix(v)) for b in builds)
+        ]
+    return [version for version in versions if version in listed]
+
+
+def neoforge_prefix(version):
+    parts = version.split(".")
+    if version.startswith("1."):
+        return parts[1] + "." + (parts[2] if len(parts) > 2 else "0") + "."
+    return version + "."
