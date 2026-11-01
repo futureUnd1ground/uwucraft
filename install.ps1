@@ -43,7 +43,7 @@ if ($LASTEXITCODE -ne 0) { throw 'uwucraft installation failed.' }
 # A launcher independent of the original checkout location. No permanent policy changes.
 $launcher = Join-Path $target 'uwucraft.cmd'
 $exe = Join-Path $venv 'Scripts\uwucraft.exe'
-[IO.File]::WriteAllText($launcher, "@echo off`r`n`"$exe`" %*`r`n", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($launcher, "@echo off`r`n`"%~dp0venv\Scripts\uwucraft.exe`" %*`r`n", [Text.UTF8Encoding]::new($false))
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 if (($userPath -split ';') -notcontains $target) {
     [Environment]::SetEnvironmentVariable('Path', "$target;$userPath", 'User')

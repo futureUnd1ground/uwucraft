@@ -248,10 +248,13 @@ public class Fixture {
 
 
 @native
-def test_native_temurin_download(paths):
+def test_native_temurin_download(paths, tmp_path, monkeypatch):
     if os.environ.get("UWUCRAFT_WINDOWS_INTEGRATION") != "1":
         pytest.skip("explicit network integration opt-in")
-    java = runtime.provision(21, paths)
+    # The D: runner volume disables 8.3 names. Java itself needs an ASCII
+    # installation path there; server/config directories remain Unicode.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "runtime-ascii"))
+    java = runtime.provision(21, Paths())
     result = subprocess.run([java, "-version"], capture_output=True, timeout=20)
     assert result.returncode == 0
     assert b"21." in result.stderr
@@ -320,3 +323,15 @@ def test_native_official_paper_server(paths):
     finally:
         server.stop(paths)
         windows.wait_watchdog(paths)
+
+
+@native
+def test_native_java_unicode_path_reports_unsupported_volume(paths):
+    file = paths.data / "java.exe"
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_bytes(b"not executed")
+    try:
+        short = windows.java_path(file)
+        assert short.isascii() and Path(short).samefile(file)
+    except Error as exc:
+        assert "8.3" in str(exc) and "XDG_DATA_HOME" in str(exc)
