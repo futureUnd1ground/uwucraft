@@ -20,6 +20,7 @@ class CreateServer(ModalScreen):
     #create-dialog { width: 86; max-width: 98%; height: auto; max-height: 95%; padding: 1 2; border: round $accent; background: $surface; }
     #create-fields { layout: grid; grid-size: 2; grid-columns: 1fr 1fr; grid-gutter: 0 2; height: auto; }
     .create-field { height: 5; }
+    .version-field { height: 8; }
     .create-field Label { height: 1; }
     .create-field Input, .create-field Select { margin: 0; }
     #create-eula { height: auto; width: 100%; margin: 1 0; }
@@ -93,9 +94,15 @@ class CreateServer(ModalScreen):
                         Input(value="20", type="integer", id="create-players"),
                     ),
                 ]:
-                    with Vertical(classes="create-field"):
+                    with Vertical(
+                        classes="create-field version-field"
+                        if label == "Minecraft"
+                        else "create-field"
+                    ):
                         yield Label(label)
                         yield control
+                        if label == "Minecraft":
+                            yield Button("Выбрать версию", id="create-versions")
             yield Checkbox(
                 "Принимаю Minecraft EULA: https://aka.ms/MinecraftEULA",
                 id="create-eula",
@@ -117,7 +124,6 @@ class CreateServer(ModalScreen):
             )
             with Horizontal(id="create-actions"):
                 yield Button("Создать сервер", id="create-submit", variant="primary")
-                yield Button("Версии", id="create-versions")
                 yield Button("Закрыть", id="create-close")
 
     def on_mount(self):
@@ -167,7 +173,6 @@ class CreateServer(ModalScreen):
             self.query_one("#create-note").display = False
             self.query_one("#create-eula").display = False
             self.query_one("#create-submit").display = False
-            self.query_one("#create-versions").display = False
             if hasattr(self.app, "select_profile") and self.paths.file.exists():
                 await self.app.select_profile(self.paths.profile)
             address = self.report["address"]
@@ -195,7 +200,8 @@ class CreateServer(ModalScreen):
             for widget in self.query("Input, Select, Checkbox"):
                 widget.disabled = False
             self.query_one("#create-submit", Button).disabled = False
-            self.query_one("#create-versions", Button).disabled = False
+            if self.query("#create-versions"):
+                self.query_one("#create-versions", Button).disabled = False
         finally:
             self.creating = False
             self.query_one("#create-close", Button).disabled = False
