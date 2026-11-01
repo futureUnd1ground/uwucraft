@@ -7,56 +7,54 @@ import subprocess
 import sys
 
 from .config import Error, Paths
-from .sources import get
+
+
+def public_ipv4(value):
+    try:
+        address = ipaddress.IPv4Address(value.strip())
+    except (ValueError, AttributeError) as exc:
+        raise Error(
+            "HTTPS-сервис не вернул корректный IPv4. Проверьте public_ip_url."
+        ) from exc
+    if not address.is_global or address.is_multicast or address.is_reserved:
+        raise Error(
+            "Полученный IPv4 не является публичным. Нужен белый IPv4 от провайдера."
+        )
+    return str(address)
+
+
+def external_ipv4(paths=None):
+    paths = paths or Paths()
+    # One bounded HTTPS attempt; public discovery must not stall the wizard.
+    import httpx
+
+    url = paths.load().public_ip_url
+    if not url.startswith("https://"):
+        raise Error("public_ip_url должен использовать HTTPS.")
+    try:
+        with httpx.Client(timeout=5, follow_redirects=False) as client:
+            response = client.get(url)
+            response.raise_for_status()
+            return public_ipv4(response.text)
+    except httpx.HTTPError as exc:
+        raise Error(
+            "Не удалось определить публичный IPv4 через HTTPS. Проверьте сеть и public_ip_url."
+        ) from exc
 
 
 def addresses(paths=None, public=False):
-    config = (paths or Paths()).load()
-    local = "127.0.0.1"
+    paths = paths or Paths()
+    config = paths.load()
+    ip = external_ipv4(paths) if public else config.public_address
     try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("1.1.1.1", 80))
-            local = sock.getsockname()[0]
-    except OSError:
-        pass
-    # Select the physical default-route interface instead of a split-tunnel VPN.
-    try:
-        import json
-
-        import psutil
-
-        routes = json.loads(
-            subprocess.check_output(["ip", "-j", "route", "show", "default"], timeout=3)
-        )
-        for route in routes:
-            interface = route.get("dev", "")
-            if interface.startswith(("tun", "tap", "wg", "amn")):
-                continue
-            candidates = psutil.net_if_addrs().get(interface, [])
-            local = next(a.address for a in candidates if a.family == socket.AF_INET)
-            break
-    except (OSError, subprocess.SubprocessError, ValueError, StopIteration):
-        pass
-    from .tunnel import status as tunnel_status
-
-    tunnel = tunnel_status(paths)
-    ip = config.public_address
-    if public and not ip and not tunnel:
-        try:
-            ip = str(ipaddress.ip_address(get(config.public_ip_url).text.strip()))
-            if ":" in ip:
-                ip = "[" + ip + "]"
-        except (Error, ValueError):
-            ip = ""
-    public_address = tunnel.get("address") or (
-        f"{ip}:{config.port}" if ip else "Не определён"
-    )
+        ip = public_ipv4(ip)
+    except Error:
+        ip = ""
+    address = f"{ip}:{config.port}" if ip else "Не определён"
     return {
-        "public": public_address,
-        "local": f"{local}:{config.port}",
-        "playit": config.playit_address or "Не настроен",
+        "public": address,
         "port": config.port,
-        "reachability": reachability(public_address, paths),
+        "reachability": reachability(address, paths),
     }
 
 
@@ -110,21 +108,35 @@ def probe(address, paths=None):
 
     from .sources import metadata
 
-    if not address or "/" in address or len(address) > 300:
-        raise Error("Укажите hostname:port или IP:port.")
-    result = metadata("https://api.mcsrvstat.us/3/" + quote(address, safe=":[]"))
+    try:
+        host, port = address.rsplit(":", 1)
+        public_ipv4(host)
+        if not 1024 <= int(port) <= 65535:
+            raise ValueError
+    except (ValueError, Error) as exc:
+        raise Error("Укажите публичный IPv4:порт (1024–65535).") from exc
+    result = metadata(
+        "https://api.mcsrvstat.us/3/" + quote(address, safe=":[]"), timeout=8
+    )
     import json
     import time
 
     from .config import atomic
 
     paths = paths or Paths()
+    identifier = paths.load().server_id
+    identity_verified = bool(
+        result.get("online")
+        and identifier
+        and identifier in " ".join(result.get("motd", {}).get("clean", []))
+    )
     atomic(
         paths.data / "network-probe.json",
         json.dumps(
             {
                 "address": address,
                 "online": result.get("online", False),
+                "identity_verified": identity_verified,
                 "checked_at": time.time(),
                 "cached": result.get("debug", {}).get("cachehit", False),
             }
@@ -134,6 +146,7 @@ def probe(address, paths=None):
         "online": result.get("online", False),
         "version": result.get("version", "—"),
         "players": result.get("players", {}),
+        "identity_verified": identity_verified,
         "source": "mcsrvstat.us",
         "cached": result.get("debug", {}).get("cachehit", False),
         "cache_expires": result.get("debug", {}).get("cacheexpire"),
@@ -212,6 +225,8 @@ def reachability(address, paths=None):
         record = json.loads((paths.data / "network-probe.json").read_text())
         if record["address"] != address or time.time() - record["checked_at"] > 300:
             return "Не проверена / проверка устарела"
+        if not record.get("identity_verified", False) and record["online"]:
+            return "Порт отвечает, но принадлежность этому серверу не подтверждена"
         return (
             "Доступен извне" if record["online"] else "Внешняя проверка: не отвечает"
         ) + (" (кэш API)" if record.get("cached") else "")

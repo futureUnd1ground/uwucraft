@@ -180,7 +180,7 @@ def test_public_probe_is_not_local_listen(paths, monkeypatch):
     from uwucraft import sources
 
     monkeypatch.setattr(sources, "metadata", lambda *a, **k: {"online": False})
-    assert network.probe("example.test:25565")["online"] is False
+    assert network.probe("8.8.8.8:25565")["online"] is False
 
 
 def test_download_hash_mismatch_keeps_original(tmp_path, monkeypatch):
@@ -301,11 +301,9 @@ def test_auto_existing_dry_run_never_starts(paths, monkeypatch):
         raise AssertionError("dry-run must not start service")
 
     monkeypatch.setattr(cli, "_lifecycle", forbidden)
-    result = CliRunner().invoke(
-        app, ["auto", "--start", "--public-access", "bore", "--dry-run"]
-    )
+    result = CliRunner().invoke(app, ["create", "--quick", "--start", "--dry-run"])
     assert result.exit_code == 0
-    assert "would_start" in result.output
+    assert "max_players" in result.output
 
 
 def test_latest_paper_skips_rc_and_unstable(monkeypatch):
@@ -338,15 +336,16 @@ def test_latest_paper_skips_rc_and_unstable(monkeypatch):
 def test_addresses_shows_saved_external_result(paths):
     import time
 
-    paths.save(Config(public_address="example.test"))
+    paths.save(Config(public_address="8.8.8.8"))
     atomic(
         paths.data / "network-probe.json",
         json.dumps(
             {
-                "address": "example.test:25565",
+                "address": "8.8.8.8:25565",
                 "online": True,
                 "checked_at": time.time(),
                 "cached": False,
+                "identity_verified": True,
             }
         ),
     )

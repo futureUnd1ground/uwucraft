@@ -133,6 +133,7 @@ class Uwucraft(App):
 
         yield from super().get_system_commands(screen)
         for name, description, action in [
+            ("Создать сервер", "Мастер создания Minecraft", self.action_create),
             ("Start server", "Запуск Minecraft", self.action_start),
             ("Stop server", "Сохранить мир и остановить", self.action_stop),
             ("Restart server", "Перезапуск сервера", self.action_restart),
@@ -215,7 +216,8 @@ class Uwucraft(App):
             )
             await area.mount(
                 Horizontal(
-                    Button("Start", id="start", variant="primary"),
+                    Button("Создать сервер", id="create-server", variant="primary"),
+                    Button("Start", id="start"),
                     Button("Stop", id="stop"),
                     Button("Restart", id="restart"),
                     Button("Backup", id="backup"),
@@ -229,9 +231,7 @@ class Uwucraft(App):
             )
             await area.mount(
                 Horizontal(
-                    Button("Copy LAN", id="copy-local"),
-                    Button("Copy address", id="copy-public"),
-                    Button("Player info", id="copy-info"),
+                    Button("Скопировать адрес", id="copy-public", variant="primary"),
                     classes="actions",
                 )
             )
@@ -240,14 +240,14 @@ class Uwucraft(App):
             await area.mount(
                 self.card(
                     "CARE / YOUR WORLD",
-                    f"Последний бэкап: {copies[0]['name'] if copies else 'Ещё нет — Ctrl+B'}\nМоды: {len(content.inventory(self.paths))}\nМир: {'Создан' if world.exists() else 'Будет создан при первом запуске'}\nWhitelist включён по умолчанию. Добавьте игроков во вкладке Players.",
+                    f"Последний бэкап: {copies[0]['name'] if copies else 'Ещё нет — Ctrl+B'}\nМоды: {len(content.inventory(self.paths))}\nМир: {'Создан' if world.exists() else 'Будет создан при первом запуске'}\nСписки игроков и операторов — во вкладке Players.",
                 )
             )
             if not config.version:
                 await area.mount(
                     self.card(
                         "GET STARTED",
-                        "Сервер пока не установлен.\nВ отдельном терминале: uwucraft auto\nМастер проверит систему и запросит принятие EULA.",
+                        "Сервер пока не установлен.\nВ отдельном терминале: uwucraft create\nМастер проверит систему и запросит принятие EULA.",
                     )
                 )
         elif self.page == "Console":
@@ -284,16 +284,33 @@ class Uwucraft(App):
                 Horizontal(
                     Button("Get public IP", id="fetch-ip"),
                     Button("Check port", id="check-port"),
-                    Button("Copy LAN", id="copy-local"),
+                    Button("Настроить доступ", id="configure-network"),
                     classes="actions",
                 )
             )
             await area.mount(
                 self.card(
                     "PUBLIC ACCESS",
-                    "Пробросьте TCP-порт сервера на маршрутизаторе и разрешите его в существующем firewall.\nЛокальный listen НЕ подтверждает доступ из интернета. Проверяйте с независимой внешней сети.\nCGNAT: используйте playit; установка/привязка агента выполняется отдельно.\nНе открывайте административные порты. RCON выключен.",
+                    "Пробросьте TCP-порт сервера на маршрутизаторе и разрешите его в существующем firewall.\nЛокальный listen НЕ подтверждает доступ из интернета. Проверяйте с независимой внешней сети.\nПри CGNAT запросите белый IPv4 у провайдера. Автопроброс требует UPnP или NAT-PMP на маршрутизаторе.\nНе открывайте административные порты. RCON выключен.",
                 )
             )
+            report_file = self.paths.data / "deployment.json"
+            if report_file.exists():
+                try:
+                    report = json.loads(report_file.read_text())
+                    messages = report.get("errors", []) + report.get("warnings", [])
+                    await area.mount(
+                        self.card(
+                            "ДИАГНОСТИКА",
+                            "\n".join(messages) or "Ошибок настройки не сохранено.",
+                        )
+                    )
+                except (OSError, ValueError):
+                    await area.mount(
+                        self.card(
+                            "ДИАГНОСТИКА", "Не удалось прочитать отчёт настройки."
+                        )
+                    )
         elif self.page == "Themes":
             await area.mount(
                 Static(
@@ -461,17 +478,9 @@ class Uwucraft(App):
         return f"{c.name}\nMinecraft {c.version or '—'}  /  {c.loader.upper()}  /  {c.memory}\nСостояние: {state['status']}   Порт: {c.port}\nПроцесс RAM: {state.get('ram_mb', 0)} MiB   Uptime: {state.get('uptime', 0)}s"
 
     def connection(self):
-        data = self.address or network.addresses(self.paths)
-        c = self.paths.load()
-        reachability = network.reachability(data["public"], self.paths)
-        if self.hide_addresses:
-            data = {
-                **data,
-                "public": "•••• (privacy mode)",
-                "local": "•••• (privacy mode)",
-                "playit": "•••• (privacy mode)",
-            }
-        return f"Public    {data['public']}\nLAN       {data['local']}\nPlayit    {data['playit']}\nMinecraft {c.version or '—'} · {c.loader}\nДоступность: {reachability}"
+        data = network.addresses(self.paths)
+        address = "•••• (privacy mode)" if self.hide_addresses else data["public"]
+        return address + "\n" + network.reachability(data["public"], self.paths)
 
     def player_text(self):
         result = []
@@ -692,16 +701,21 @@ class Uwucraft(App):
     def action_backup(self):
         self.perform(lambda: backups.create(self.paths))
 
+    def action_create(self):
+        from .create_ui import CreateServer
+
+        self.push_screen(CreateServer(self.paths))
+
     def action_copy_address(self):
-        self.copy_address("local")
+        self.copy_address("public")
 
     def action_refresh(self):
         self.update_state()
         self.notify("Обновлено")
 
     def copy_address(self, kind):
-        data = self.address or network.addresses(self.paths)
-        value = data["public"] if kind in {"public", "info"} else data["local"]
+        data = network.addresses(self.paths)
+        value = data["public"]
         if value == "Не определён":
             self.notify(
                 "Network → Get public IP или задайте public_address.",
@@ -728,7 +742,22 @@ class Uwucraft(App):
             )
         elif action in actions:
             actions[action]()
-        elif action in {"copy-local", "copy-public", "copy-info"}:
+        elif action == "create-server":
+            self.action_create()
+        elif action == "configure-network":
+            from .deployment import configure, disable_legacy_service
+
+            def configure_public():
+                disable_legacy_service()
+                report = configure(self.paths)
+                return (
+                    "Внешний вход подтверждён."
+                    if report["verified"]
+                    else "Доступность извне не подтверждена. Диагностика — в Network."
+                )
+
+            self.perform(configure_public)
+        elif action in {"copy-public", "copy-info"}:
             self.copy_address(action.split("-")[1])
         elif action == "pause":
             self.paused = not self.paused
@@ -761,12 +790,22 @@ class Uwucraft(App):
         elif action == "fetch-ip":
 
             def fetch():
-                self.address = network.addresses(self.paths, public=True)
-                return "Адреса обновлены; публичная доступность не проверена."
+                data = network.addresses(self.paths, public=True)
+                if data["public"] == "Не определён":
+                    raise Error("HTTPS-сервис не вернул публичный IPv4.")
+                with self.paths.lock():
+                    config = self.paths.load()
+                    config.public_address = data["public"].rsplit(":", 1)[0]
+                    self.paths.save(config)
+                return "Публичный IPv4 определён; доступность порта ещё не проверена."
 
             self.perform(fetch)
         elif action == "check-port":
-            self.perform(lambda: network.check(self.paths))
+            self.perform(
+                lambda: network.probe(
+                    network.addresses(self.paths, public=True)["public"], self.paths
+                )
+            )
         elif action == "save-memory":
             value = self.query_one("#memory-setting", Input).value
 

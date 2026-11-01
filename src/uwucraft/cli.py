@@ -4,14 +4,12 @@ import time
 from pathlib import Path
 from typing import Annotated
 
-import psutil
 import typer
 from rich.console import Console
 from rich.panel import Panel
 
 from . import backups, content, installers, network, server
-from .config import Error, Paths, memory_mb
-from .sources import latest_compatible
+from .config import Error, Paths
 
 app = typer.Typer(
     no_args_is_help=False, help="uwucraft · A quiet home for your Minecraft server."
@@ -37,175 +35,116 @@ def tui(theme: str = "", hide_addresses: bool = False):
     Uwucraft(selected_theme=theme, hide_addresses=hide_addresses).run()
 
 
+def show_creation_report(report):
+    address = report.get("address") or "Публичный IPv4 не определён"
+    console.print(
+        Panel(
+            address,
+            title="Публичный адрес для подключения",
+            border_style="green" if report.get("verified") else "yellow",
+        )
+    )
+    console.print(
+        "Внешний вход Minecraft подтверждён."
+        if report.get("verified")
+        else "Доступность извне НЕ подтверждена."
+    )
+    for message in report.get("errors", []):
+        console.print("Ошибка: " + message, markup=False)
+    for message in report.get("warnings", []):
+        console.print("Примечание: " + message, markup=False)
+
+
+@app.command("create")
+def create_command(
+    quick: bool = False,
+    name: str = "",
+    version: str = "",
+    loader: str = "",
+    mode: str = "",
+    memory: str = "",
+    port: int = 25565,
+    max_players: int = 20,
+    accept_eula: bool = False,
+    start: bool = True,
+    dry_run: bool = False,
+):
+    """Создать сервер: краткий мастер или --quick без вопросов."""
+    from .creation import CreateOptions, create, suggested_memory
+
+    if not quick:
+        name = name or typer.prompt("Название", default="My Minecraft server")
+        loader = loader or typer.prompt(
+            "Ядро (vanilla/paper/purpur/fabric/forge/neoforge)", default="paper"
+        )
+        version = version or typer.prompt(
+            "Minecraft (auto — последняя совместимая стабильная версия)", default="auto"
+        )
+        mode = mode or typer.prompt("Режим (лицензия/пиратка)", default="лицензия")
+        memory = memory or typer.prompt("RAM", default=suggested_memory())
+        port = typer.prompt("TCP-порт", default=port, type=int)
+        max_players = typer.prompt("Количество игроков", default=max_players, type=int)
+    modes = {"license": True, "лицензия": True, "pirate": False, "пиратка": False}
+    mode = mode or "license"
+    if mode not in modes:
+        raise Error("Режим: license/лицензия или pirate/пиратка.")
+    if not quick and not accept_eula and not dry_run:
+        accept_eula = typer.confirm(
+            "Принимаете Minecraft EULA? https://aka.ms/MinecraftEULA", default=False
+        )
+    options = CreateOptions(
+        name=name or "My Minecraft server",
+        version="" if version == "auto" else version,
+        loader=loader or "paper",
+        online_mode=modes[mode],
+        memory=memory,
+        port=port,
+        max_players=max_players,
+        accept_eula=accept_eula,
+        start=start,
+    )
+    if dry_run:
+        from dataclasses import asdict
+
+        console.print(asdict(options))
+        return
+    with console.status("Создание сервера…") as status:
+        report = create(options, progress=status.update)
+    show_creation_report(report)
+    if report.get("errors") or not report.get("verified"):
+        raise typer.Exit(1)
+
+
 @app.command("auto")
 @app.command("install")
 def auto(
     loader: str = "",
-    version: str = "",
     memory: str = "",
+    version: str = "",
     port: int = 25565,
     accept_eula: bool = False,
-    start: bool = False,
-    install_deps: bool = False,
-    service: bool = True,
-    local_runtime: bool = True,
-    offline_mode: bool = False,
-    open_tui: bool = False,
+    start: bool = True,
     dry_run: bool = False,
-    admin: str = "",
-    authme: bool = False,
-    compatibility: bool = False,
-    public_access: str = "none",
 ):
-    """Установка сервера: явная EULA, безопасные defaults, официальные источники."""
-    paths = Paths()
-    if paths.file.exists():
-        if dry_run:
-            console.print(
-                {
-                    "existing_server": "preserved",
-                    "would_start": start,
-                    "public_access": public_access,
-                }
-            )
-            return
+    """Совместимый короткий вход в общий мастер create."""
+    if Paths().file.exists():
         console.print(
-            "[yellow]Существующий сервер сохранён.[/] Используйте status/start/update."
-        )
-        if start:
-            _lifecycle("start")
-            server.wait_ready(paths)
-        if public_access != "none":
-            from .deployment import expose
-
-            console.print(expose(public_access, paths))
-        return
-    interactive = not loader
-    if not loader:
-        loader = typer.prompt(
-            "Ядро: vanilla / paper / purpur / fabric / forge / neoforge",
-            default="paper",
-        )
-    if loader not in installers.LOADERS:
-        raise Error("Допустимые ядра: " + ", ".join(installers.LOADERS))
-    if not version:
-        latest = latest_compatible(loader)
-        version = typer.prompt("Minecraft", default=latest) if interactive else latest
-    suggested = max(
-        1, min(6, int((psutil.virtual_memory().available / 1024**3 - 1) * 0.6))
-    )
-    memory = memory or (
-        typer.prompt("Память", default=f"{suggested}G")
-        if interactive
-        else f"{suggested}G"
-    )
-    memory_mb(memory)
-    if interactive:
-        port = typer.prompt("Порт", default=port, type=int)
-        offline_mode = typer.confirm(
-            "Разрешить неофициальные клиенты? Отключает проверку аккаунтов; нужен плагин авторизации.",
-            default=False,
-        )
-        admin = admin or typer.prompt(
-            "Ник администратора (можно оставить пустым)", default=""
-        )
-        local_runtime = typer.confirm(
-            "Автоматически скачать подходящую Java локально, если её нет?", default=True
-        )
-    if public_access not in {"none", "bore"}:
-        raise Error(
-            "public-access: none или bore. Прямой доступ настраивается на роутере."
-        )
-    if offline_mode and loader in {"paper", "purpur"}:
-        authme = True
-    if public_access != "none" and not start and not interactive:
-        raise Error("Для публичного доступа добавьте --start.")
-    if not 1024 <= port <= 65535:
-        raise Error("Порт: 1024–65535.")
-    if dry_run:
-        console.print(
-            {
-                "loader": loader,
-                "version": version,
-                "memory": memory,
-                "port": port,
-                "path": str(paths.server),
-                "accepted_eula": accept_eula,
-            }
+            "Существующий сервер сохранён. Используйте network configure или start."
         )
         return
-    if not accept_eula and interactive:
-        accept_eula = typer.confirm(
-            "Принимаете Minecraft EULA? https://aka.ms/MinecraftEULA", default=False
-        )
-    if offline_mode:
-        console.print(
-            "[bold yellow]OFFLINE MODE: Mojang не проверяет аккаунты. Имена можно подделать. Для публичного сервера установите плагин авторизации; whitelist не защищает от подмены имени.[/]"
-        )
-    with console.status("Проверка системы и загрузка официального дистрибутива…"):
-        config = installers.install(
-            loader,
-            version,
-            memory,
-            port,
-            accept_eula,
-            install_deps,
-            local_runtime=local_runtime,
-            offline_mode=offline_mode,
-        )
-    if admin:
-        from .players import seed_admin
-
-        seed_admin(admin, offline_mode, paths)
-    if authme:
-        from .auth import install_authme
-
-        console.print(install_authme(paths))
-    if compatibility:
-        from .compat import install as install_compat
-
-        console.print(install_compat(paths))
-    backup_path = backups.create(paths)
-    if interactive:
-        service = typer.confirm(
-            "Установить user systemd service и включить автозапуск?", default=True
-        )
-        start = typer.confirm("Выполнить пробный запуск сервера?", default=True)
-    if service:
-        server.unit(paths)
-        subprocess.run(
-            ["systemctl", "--user", "enable", "uwucraft.service"], check=True
-        )
-        console.print(
-            'Для запуска до входа в систему: loginctl enable-linger "$USER" (может потребоваться администратор).'
-        )
-    if start:
-        if service:
-            subprocess.run(
-                ["systemctl", "--user", "start", "uwucraft.service"], check=True
-            )
-            time.sleep(1)
-        else:
-            server.start(paths)
-        with console.status(
-            "Ожидание подтверждения готовности Minecraft (до 240 секунд)…"
-        ):
-            server.wait_ready(paths)
-        if offline_mode and admin and authme:
-            from .auth import reserve_admin
-
-            console.print(reserve_admin(admin, paths))
-        if public_access != "none":
-            from .deployment import expose
-
-            console.print(expose(public_access, paths))
-    console.print(
-        Panel(
-            f"[bold magenta]uwucraft · ready[/]\n{config.loader} / {config.version} · {config.memory} · :{config.port}\nСостояние: {server.status(paths)['status']}\nLAN: {network.addresses(paths)['local']}\nPublic: {network.addresses(paths)['public']}\nВнешняя проверка: {network.reachability(network.addresses(paths)['public'], paths)}\nBackup: {backup_path.name}\nuwucraft tui · uwucraft logs · uwucraft whitelist add <игрок>"
-        )
+    create_command(
+        quick=bool(loader),
+        name="",
+        version=version,
+        loader=loader,
+        mode="",
+        memory=memory,
+        port=port,
+        max_players=20,
+        accept_eula=accept_eula,
+        start=start,
+        dry_run=dry_run,
     )
-    if open_tui or (interactive and typer.confirm("Открыть TUI?", default=True)):
-        tui()
 
 
 @app.command()
@@ -333,9 +272,9 @@ def update(dry_run: bool = False):
 
 
 @app.command("copy-address")
-def copy_address(public: bool = False, player_info: bool = False):
-    data = network.addresses(public=public)
-    address = data["public"] if public else data["local"]
+def copy_address(player_info: bool = False):
+    data = network.addresses(public=True)
+    address = data["public"]
     if address == "Не определён":
         raise Error(
             "Публичный IP получить не удалось. Задайте public_address в config.toml."
@@ -349,12 +288,15 @@ def copy_address(public: bool = False, player_info: bool = False):
 
 @net.command("check")
 def network_check():
-    console.print(network.check())
+    data = network.addresses(public=True)
+    if data["public"] == "Не определён":
+        raise Error("Не определён публичный IPv4.")
+    console.print(network.probe(data["public"]))
 
 
 @net.command("address")
-def network_address(public: bool = False):
-    console.print(network.addresses(public=public))
+def network_address():
+    console.print(network.addresses(public=True))
 
 
 @mod.command("add")
@@ -572,9 +514,9 @@ def network_diagnose(wan_ip: str = ""):
             {
                 "wan_public": address.is_global,
                 "cgnat": cgnat,
-                "action": "Нужен публичный IPv4 от провайдера или глобальный IPv6."
+                "action": "Нужен публичный IPv4 от провайдера с входящими TCP-подключениями."
                 if not address.is_global
-                else "Настройте проброс TCP-порта и проверьте firewall/обратный маршрут VPN.",
+                else "Настройте проброс TCP-порта и проверьте nftables и маршрутизацию.",
             }
         )
 
@@ -587,19 +529,20 @@ def auth_reserve_admin(name: str):
     console.print(reserve_admin(name))
 
 
-@net.command("tunnel")
-def network_tunnel(host: str = "bore.pub", stop: bool = False):
-    """Опциональный сторонний TCP relay без аккаунта. Порт сервера станет публичным."""
-    if stop:
-        subprocess.run(
-            ["systemctl", "--user", "disable", "--now", "uwucraft-tunnel.service"],
-            check=True,
-        )
-        console.print("Туннель остановлен.")
-    else:
-        from .deployment import expose
+@net.command("configure")
+def network_configure():
+    """Автоматически настроить nftables, прямой проброс и проверить внешний порт."""
+    from .deployment import configure, disable_legacy_service
 
-        console.print(expose("bore", host=host))
+    paths = Paths()
+    if not paths.file.exists():
+        raise Error("Сначала создайте сервер: uwucraft create.")
+    disable_legacy_service()
+    with console.status("Настройка прямого публичного доступа…") as status:
+        report = configure(paths, status.update)
+    show_creation_report(report)
+    if report["errors"] or not report["verified"]:
+        raise typer.Exit(1)
 
 
 @mod.command("search")

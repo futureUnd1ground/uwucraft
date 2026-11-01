@@ -120,6 +120,9 @@ def install(
     paths=None,
     local_runtime=False,
     offline_mode=False,
+    name="My uwucraft server",
+    max_players=20,
+    whitelist=True,
 ):
     paths = paths or Paths()
     if not accept_eula:
@@ -128,6 +131,15 @@ def install(
         )
     if loader not in LOADERS:
         raise Error("Неизвестный загрузчик.")
+    import secrets
+
+    from .creation import validate_name
+
+    validate_name(name)
+    if not 1024 <= port <= 65535 or not 1 <= max_players <= 10000:
+        raise Error("Проверьте порт (1024–65535) и количество игроков (1–10000).")
+    server_id = secrets.token_hex(6)
+    motd_name = name.encode("unicode_escape").decode("ascii").replace("=", "\\=")
     with paths.lock():
         if paths.file.exists() or (
             paths.server.exists() and any(paths.server.iterdir())
@@ -170,17 +182,17 @@ def install(
                 staging / "server.properties",
                 f"""# Managed initial defaults; later changes are preserved.
 server-port={port}
-server-ip=
+server-ip=0.0.0.0
 online-mode={str(not offline_mode).lower()}
 enable-rcon=false
-white-list=true
-enforce-whitelist=true
+white-list={str(whitelist).lower()}
+enforce-whitelist={str(whitelist).lower()}
 enforce-secure-profile={str(not offline_mode).lower()}
-max-players=20
+max-players={max_players}
 difficulty=normal
 gamemode=survival
 pvp=true
-motd=A quiet home. uwucraft.
+motd={motd_name} | uwucraft {server_id}
 view-distance=8
 simulation-distance=6
 spawn-protection=16
@@ -191,7 +203,15 @@ spawn-protection=16
             staging.rename(paths.server)
             paths.save(
                 Config(
-                    loader=loader, version=version, memory=memory, port=port, java=java
+                    loader=loader,
+                    version=version,
+                    memory=memory,
+                    port=port,
+                    java=java,
+                    name=name,
+                    max_players=max_players,
+                    online_mode=not offline_mode,
+                    server_id=server_id,
                 )
             )
     return paths.load()

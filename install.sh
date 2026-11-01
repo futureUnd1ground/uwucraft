@@ -12,4 +12,4 @@ else
     mkdir -p "$HOME/.local/bin"
     ln -sfn "$target/venv/bin/uwucraft" "$HOME/.local/bin/uwucraft"
 fi
-printf '\nГотово: uwucraft auto\nДобавьте ~/.local/bin в PATH, если требуется.\n'
+printf '\nГотово: uwucraft create\nДобавьте ~/.local/bin в PATH, если требуется.\n'

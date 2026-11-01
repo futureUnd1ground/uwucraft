@@ -4,7 +4,7 @@ import re
 import tempfile
 import tomllib
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import tomli_w
@@ -45,7 +45,9 @@ class Config:
     theme: str = "uwu-dark"
     public_ip_url: str = "https://api.ipify.org"
     public_address: str = ""
-    playit_address: str = ""
+    max_players: int = 20
+    online_mode: bool = True
+    server_id: str = ""
     backup_keep: int = 7
     name: str = "My uwucraft server"
 
@@ -67,16 +69,31 @@ class Paths:
         self.state = self.data / "state.json"
 
     def load(self):
-        return (
-            Config(**tomllib.loads(self.file.read_text()))
-            if self.file.exists()
-            else Config()
-        )
+        if not self.file.exists():
+            return Config()
+        values = tomllib.loads(self.file.read_text())
+        properties = self.server / "server.properties"
+        if properties.exists():
+            for line in properties.read_text().splitlines():
+                if line.startswith("online-mode=") and line.split("=", 1)[1] in {
+                    "true",
+                    "false",
+                }:
+                    values["online_mode"] = line.split("=", 1)[1] == "true"
+                if (
+                    line.startswith("max-players=")
+                    and line.split("=", 1)[1].isdecimal()
+                ):
+                    values["max_players"] = int(line.split("=", 1)[1])
+        known = {field.name for field in fields(Config)}
+        return Config(**{key: value for key, value in values.items() if key in known})
 
     def save(self, config):
         memory_mb(config.memory)
         if not 1024 <= config.port <= 65535:
             raise Error("Порт должен быть в диапазоне 1024–65535.")
+        if not 1 <= config.max_players <= 10000:
+            raise Error("Количество игроков: 1–10000.")
         atomic(self.file, tomli_w.dumps(asdict(config)))
 
     @contextmanager

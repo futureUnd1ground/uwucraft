@@ -114,11 +114,14 @@ def restore(name, paths=None):
             ):
                 raise Error("Неполная резервная копия.")
             import tomllib
+            from dataclasses import fields
 
             from .config import Config, memory_mb
 
+            values = tomllib.loads((staging / "config/config.toml").read_text())
+            known = {field.name for field in fields(Config)}
             restored_config = Config(
-                **tomllib.loads((staging / "config/config.toml").read_text())
+                **{key: value for key, value in values.items() if key in known}
             )
             memory_mb(restored_config.memory)
             if not 1024 <= restored_config.port <= 65535:
