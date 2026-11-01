@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import time
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from .config import Error, Paths
@@ -240,8 +241,11 @@ def main():
     os.environ["XDG_DATA_HOME"] = options.data
     paths = Paths()
     paths.data.mkdir(parents=True, exist_ok=True)
-    with (paths.data / f"{options.kind}-task.log").open("a", encoding="utf-8") as log:
-        sys.stdout = sys.stderr = log
+    with (
+        (paths.data / f"{options.kind}-task.log").open("a", encoding="utf-8") as log,
+        redirect_stdout(log),
+        redirect_stderr(log),
+    ):
         if options.kind == "server":
             run(paths)
         elif options.kind == "network":

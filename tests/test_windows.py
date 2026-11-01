@@ -282,3 +282,41 @@ def test_native_firewall_rule():
         windows.powershell(
             f"Get-NetFirewallRule -Name 'uwucraft-TCP-{port}' -ErrorAction SilentlyContinue | Remove-NetFirewallRule"
         )
+
+
+@native
+def test_native_official_paper_server(paths):
+    if os.environ.get("UWUCRAFT_WINDOWS_MINECRAFT") != "1":
+        pytest.skip("explicit real Minecraft integration opt-in")
+    from uwucraft import installers
+
+    installers.install(
+        "paper",
+        "1.21.4",
+        "1G",
+        32678,
+        True,
+        paths=paths,
+        local_runtime=True,
+        offline_mode=True,
+        name="Windows CI",
+        whitelist=False,
+    )
+    properties = paths.server / "server.properties"
+    with properties.open("a", encoding="utf-8") as file:
+        file.write("\nview-distance=2\nsimulation-distance=2\nspawn-chunk-radius=0\n")
+    try:
+        server.start(paths)
+        server.wait_ready(paths, timeout=240)
+        response = network.minecraft_status("127.0.0.1", 32678)
+        assert paths.load().server_id in str(response)
+        assert "Done (" in server.logs(paths)
+    except Exception:
+        for name in ["console.log", "supervisor.log", "server-task.log"]:
+            log = paths.data / name
+            if log.exists():
+                print(name, log.read_text(encoding="utf-8", errors="replace")[-16000:])
+        raise
+    finally:
+        server.stop(paths)
+        windows.wait_watchdog(paths)

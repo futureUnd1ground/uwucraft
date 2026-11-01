@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — 2026-11-01
+
+- Нативный Windows backend: APPDATA/LOCALAPPDATA, Windows file locks и защищённая локальная named-pipe консоль.
+- Автоустановка Temurin ZIP с java.exe и Forge/NeoForge win_args.txt; единый мастер CLI/TUI сохранён.
+- Defender Firewall через одноразовое UAC, маршруты через PowerShell, буфер Windows, UPnP/NAT-PMP без изменения общего протокольного backend.
+- Пользовательский Task Scheduler после входа, watchdog crash/restart, явный stop, ежедневные backups и отдельное продление проброса.
+- install.cmd/install.ps1, ярлык и пользовательский PATH; Windows CI с настоящим JVM lifecycle и Java download.
+- UTF-8 для конфигураций и журналов на обеих ОС; Linux backend и существующий мир сохранены.
+
 ## 0.2.0 — 2026-11-01
 
 - Общий backend создания сервера: CLI `create`, короткие алиасы `auto`/`install` и TUI «Создать сервер».

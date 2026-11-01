@@ -121,6 +121,7 @@ def configure(paths=None, progress=None):
         report["firewall"] = firewall.configure(config.port)
     except (
         firewall.FirewallError,
+        Error,
         OSError,
         ValueError,
         subprocess.SubprocessError,
@@ -137,7 +138,7 @@ def configure(paths=None, progress=None):
             report["errors"].append(problem)
         try:
             enable_renewal(paths)
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (Error, OSError, subprocess.SubprocessError) as exc:
             report["errors"].append(
                 "Проброс выполнен, но автоматическое продление не включено: " + str(exc)
             )

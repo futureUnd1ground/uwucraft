@@ -6,11 +6,34 @@
 ![Python](https://img.shields.io/badge/python-3.11.8%2B-c4a7e7)
 [![MIT](https://img.shields.io/badge/license-MIT-91d7e3)](LICENSE)
 
-**Minecraft Java на своём Linux-компьютере. Создание и управление из терминала.**
+**Minecraft Java на своём компьютере с Linux или Windows. Создание и управление из терминала.**
 
 </div>
 
 ## Установка
+
+### Windows 10/11 (x64)
+
+Скачайте [архив Windows из Releases](https://github.com/futureUnd1ground/uwucraft/releases/latest), распакуйте в постоянную папку и запустите **`install.cmd`** двойным щелчком. Установщик создаст отдельное Python-окружение, добавит команду `uwucraft` в пользовательский PATH и ярлык на рабочий стол. Если Python 3.11.8+ отсутствует, установка попробует поставить Python 3.12 через `winget`; без winget установите Python с [python.org](https://www.python.org/downloads/windows/) и повторите запуск. Установка пакета требует интернет.
+
+Из PowerShell в каталоге репозитория:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+# Откройте новый терминал после установки:
+uwucraft
+uwucraft create --quick --loader paper --port 25565 --accept-eula --start
+```
+
+`Bypass` действует только для этого процесса, постоянная политика PowerShell не меняется. WSL, Docker и отдельная системная Java не нужны: совместимый Temurin скачивается автоматически с SHA-256. Команда `uwucraft` и мастер одинаковы на обеих ОС. При первом добавлении правила Defender Windows покажет UAC: подтвердите действие. Отмена даст конкретную ошибку, не ложное подтверждение доступности.
+
+**Автозапуск Windows — после входа владельца в систему**, через пользовательскую задачу Планировщика заданий. Пароль Windows не запрашивается и не сохраняется. Это не служба до входа и не гарантия работы после выхода из аккаунта; не выходите из системы, если сервер должен продолжать работать. Заблокировать экран можно. Спящий режим/выключение ПК прерывают сервер. Watchdog перезапускает JVM после падения, но обычный `uwucraft stop` оставляет её остановленной. После пяти падений за пять минут проверьте журнал; старт задачи Планировщиком имеет собственный ограниченный retry.
+
+Данные: `%LOCALAPPDATA%\uwucraft`, настройки: `%APPDATA%\uwucraft`, приложение: `%LOCALAPPDATA%\uwucraft-app`. Консоль — локальный named pipe с отдельным случайным ключом, без RCON и сетевого порта управления. Сохраняйте ACL личных каталогов Windows; POSIX `chmod` на Windows не обеспечивает приватность. `uwucraft service` регистрирует автозапуск, `uwucraft backup-schedule` — ежедневную копию в 04:00 (пользователь должен быть в системе). `XDG_CONFIG_HOME`/`XDG_DATA_HOME` при необходимости переопределяют пути и на Windows; имена задач изолированы по каталогу данных.
+
+Для удаления автозапуска используйте «Планировщик заданий»: задачи `uwucraft-server-*`, `uwucraft-network-*`, `uwucraft-backup-*`. Правило Defender: `uwucraft-TCP-ПОРТ`. Удаление приложения не должно удалять мир: сначала выполните `uwucraft stop`, сохраните backup, затем удалите только `%LOCALAPPDATA%\uwucraft-app` и ярлык.
+
+### Linux
 
 Arch Linux / CachyOS, Python 3.11.8+, systemd:
 
@@ -42,9 +65,9 @@ uwucraft create
 2. Находит совместимую Java или устанавливает проверенный по SHA-256 Eclipse Temurin в пользовательский каталог.
 3. Скачивает выбранное ядро из официального источника, проверяет предоставленные хеши.
 4. Создаёт TOML и `server.properties`: `server-ip=0.0.0.0`, выбранные порт, режим и число игроков. RCON выключен.
-5. Настраивает JVM, user unit `uwucraft.service`, restart после падения и linger для работы после выхода из системы. Создаёт первую резервную копию.
-6. Добавляет выбранный TCP-порт в действующие входящие IPv4-цепочки nftables, сохраняя остальные правила. Создаёт root-owned helper и systemd unit для восстановления исключения после загрузки firewall.
-7. Пытается выполнить прямой проброс на маршрутизаторе: UPnP IGD, затем NAT-PMP. Успешная аренда продлевается отдельным user service.
+5. Настраивает JVM, user unit `uwucraft.service` и linger на Linux либо пользовательскую задачу Планировщика Windows; включает restart после падения. Создаёт первую резервную копию.
+6. Добавляет выбранный TCP-порт в действующие входящие IPv4-цепочки nftables, сохраняя остальные правила. На Linux создаёт root-owned helper и systemd unit для восстановления исключения после загрузки firewall. На Windows создаёт постоянное входящее TCP-правило Defender с UAC.
+7. Пытается выполнить прямой проброс на маршрутизаторе: UPnP IGD, затем NAT-PMP. Успешная аренда продлевается отдельным user service на Linux или задачей Планировщика Windows.
 8. Запускает сервер и ожидает подтверждения готовности в логе Minecraft.
 9. Определяет публичный IPv4 через HTTPS, затем отдельно проверяет внешний Minecraft-порт независимым сервисом.
 10. Показывает публичный адрес и большую кнопку **«Скопировать адрес»**, а также результат проверки и конкретные ошибки.
@@ -69,6 +92,8 @@ uwucraft create --quick --name "Friends" --loader paper --mode pirate \
 
 ### Права администратора
 
+На Windows права для Defender подтверждаются через системный UAC. Следующий раздел о sudo относится к Linux.
+
 Программа не может обойти права ОС. Для изменения nftables и установки системных зависимостей нужна авторизация sudo. Чтобы мастер не задавал пароль в середине операции, в **том же терминале**, из которого запускается программа, предварительно выполните:
 
 ```bash
@@ -89,7 +114,7 @@ sudo -v
 uwucraft network configure
 ```
 
-Разные XDG-каталоги изолируют файлы, но фиксированные имена user systemd units не позволяют запускать независимые управляемые экземпляры от одного аккаунта. Для нескольких экземпляров используйте отдельные Linux-аккаунты. Не создавайте новую установку поверх каталога существующего мира.
+На Linux разные XDG-каталоги изолируют файлы, но фиксированные имена user systemd units не позволяют запускать независимые управляемые экземпляры от одного аккаунта. Для нескольких экземпляров используйте отдельные Linux-аккаунты. Не создавайте новую установку поверх каталога существующего мира.
 
 ## Прямой публичный IPv4
 
@@ -120,6 +145,7 @@ uwucraft copy-address
 | UPnP/NAT-PMP не отвечают | Включить поддерживаемый протокол на роутере либо вручную пробросить выбранный TCP-порт на этот компьютер и закрепить его адрес в DHCP. |
 | Порт уже назначен другому устройству | Освободить правило или выбрать другой порт. Чужое UPnP-правило не перезаписывается. |
 | WAN и HTTPS IPv4 различаются | Проверить двойной NAT и корректность маршрута ответных пакетов. |
+| Отказ UAC/политика Defender | Подтвердить UAC и повторить `network configure`; при доменной политике обратиться к администратору Windows. |
 | Нет прав на nftables | Выполнить `sudo -v` в терминале запуска и повторить `network configure`. |
 | Внешний порт не отвечает | Проверить входящие подключения у провайдера, проброс, firewall и маршрут. Повторить probe после истечения кэша. |
 | Внешняя проверка недоступна | Проверить доступ к API; до положительного результата доступность неизвестна. |
@@ -243,6 +269,8 @@ uv build
 [Подробности проверки](docs/VALIDATION.md). CI проверяет Python 3.11–3.14. Успешные protocol/unit tests не заменяют реальную проверку маршрутизатора, провайдера, reboot и нагрузки. Полные live lifecycle всех шести ядер не проверены. Системные ограничения не обходятся, неподтверждённая доступность не становится «успехом».
 
 Основные модули: `creation.py` (общий сценарий), `create_ui.py` (форма), `deployment.py` (оркестрация сети), `portmap.py` (UPnP/NAT-PMP), `firewall.py` (ограниченный root helper), существующие `server`, `installers`, `sources`, `backups`, `content`, `config`, `cli`, `tui`, `themes`.
+
+Windows-адаптер использует [официальные задачи с Interactive logon](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtaskprincipal) и [архивы Temurin](https://adoptium.net/en-GB/installation). Windows CI проверяет PowerShell, регистрацию/удаление задачи, реальный ZIP Java, named pipe, crash/restart/stop JVM и установщик. JVM fixture проверяет supervisor, не игровой клиент Minecraft и не публичную сеть. UAC на интерактивном рабочем столе и reboot/logoff требуют ручной проверки.
 
 Источники: [Mojang manifest](https://piston-meta.mojang.com/mc/game/version_manifest_v2.json), [Paper API](https://docs.papermc.io/misc/downloads-service/), [Fabric Meta](https://github.com/FabricMC/fabric-meta), [Purpur API](https://api.purpurmc.org/v2/purpur), [NeoForge](https://docs.neoforged.net/user/docs/server/), [RFC 6886](https://www.rfc-editor.org/rfc/rfc6886), [UPnP IGD](https://openconnectivity.org/developer/specifications/upnp-resources/upnp/internet-gateway-device-igd-v-2-0/), [nftables chain semantics](https://wiki.nftables.org/wiki-nftables/index.php/Configuring_chains).
 

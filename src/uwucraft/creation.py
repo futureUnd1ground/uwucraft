@@ -155,7 +155,12 @@ def create(options, paths=None, progress=None):
         if windows()
         else "Настройка systemd и автозапуска"
     )
-    warning = deployment.enable_server(paths)
+    try:
+        warning = deployment.enable_server(paths)
+    except Error as exc:
+        if not windows():
+            raise
+        warning = "Автозапуск Windows не настроен: " + str(exc)
     backups.create(paths)
     try:
         deployment.disable_legacy_service()
