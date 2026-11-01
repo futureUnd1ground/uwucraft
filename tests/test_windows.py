@@ -311,6 +311,17 @@ def test_native_official_paper_server(paths):
         response = network.minecraft_status("127.0.0.1", 32678)
         assert paths.load().server_id in str(response)
         assert "Done (" in server.logs(paths)
+        server.stop(paths)
+        windows.wait_watchdog(paths)
+        from uwucraft import compat
+
+        compat.setup(paths, legacy=True)
+        server.start(paths)
+        server.wait_ready(paths, timeout=240)
+        text = server.logs(paths, lines=1000)
+        for plugin in ["ViaVersion", "ViaBackwards", "ViaRewind"]:
+            assert "Enabling " + plugin in text, text
+
     except Exception:
         for name in ["console.log", "supervisor.log", "server-task.log"]:
             log = paths.data / name
