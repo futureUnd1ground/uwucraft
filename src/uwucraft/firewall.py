@@ -174,6 +174,10 @@ WantedBy=multi-user.target
 
 def configure(port):
     """Called unprivileged. No hidden password prompt inside a running TUI."""
+    if sys.platform == "win32":
+        from uwucraft.windows import firewall
+
+        return firewall(port)
     if not shutil.which("nft"):
         active = run(["systemctl", "is-active", "nftables.service"])
         if active.returncode != 0:

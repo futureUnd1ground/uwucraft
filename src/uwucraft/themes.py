@@ -143,7 +143,7 @@ def theme(name, values):
 def load_custom(directory):
     result = []
     for file in directory.glob("*.toml"):
-        data = tomllib.loads(file.read_text())
+        data = tomllib.loads(file.read_text(encoding="utf-8"))
         colors = data["colors"]
         result.append(
             theme(

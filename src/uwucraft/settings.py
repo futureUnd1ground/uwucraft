@@ -19,7 +19,7 @@ def properties(paths=None):
     return (
         dict(
             line.split("=", 1)
-            for line in file.read_text().splitlines()
+            for line in file.read_text(encoding="utf-8").splitlines()
             if line and not line.startswith("#") and "=" in line
         )
         if file.exists()
@@ -60,7 +60,7 @@ def set_property(key, value, allow_offline=False, paths=None):
         file = paths.server / "server.properties"
         if not file.exists():
             raise Error("Сначала установите сервер.")
-        lines = file.read_text().splitlines()
+        lines = file.read_text(encoding="utf-8").splitlines()
         replaced = False
         result = []
         for line in lines:

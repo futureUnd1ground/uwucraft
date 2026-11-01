@@ -21,7 +21,9 @@ def seed_admin(name, offline=False, paths=None):
     record = {"uuid": identifier, "name": name}
     for filename in ["whitelist.json", "ops.json"]:
         target = paths.server / filename
-        records = json.loads(target.read_text()) if target.exists() else []
+        records = (
+            json.loads(target.read_text(encoding="utf-8")) if target.exists() else []
+        )
         if not any(p["uuid"] == identifier for p in records):
             records.append(
                 record

@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 from .config import Error, Paths
+from .platforms import windows
 
 
 def public_ipv4(value):
@@ -72,6 +73,11 @@ def check(paths=None):
 
 
 def copy(text):
+    if windows():
+        from .windows import literal, powershell
+
+        powershell("Set-Clipboard -Value " + literal(text))
+        return "Адрес скопирован"
     choices = []
     if os.environ.get("WAYLAND_DISPLAY"):
         choices.append(["wl-copy"])
@@ -222,7 +228,9 @@ def reachability(address, paths=None):
 
     paths = paths or Paths()
     try:
-        record = json.loads((paths.data / "network-probe.json").read_text())
+        record = json.loads(
+            (paths.data / "network-probe.json").read_text(encoding="utf-8")
+        )
         if record["address"] != address or time.time() - record["checked_at"] > 300:
             return "Не проверена / проверка устарела"
         if not record.get("identity_verified", False) and record["online"]:

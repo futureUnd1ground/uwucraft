@@ -11,6 +11,7 @@ from . import network
 from .config import Error
 from .creation import CreateOptions, create, suggested_memory
 from .installers import LOADERS
+from .platforms import windows
 
 
 class CreateServer(ModalScreen):
@@ -94,7 +95,12 @@ class CreateServer(ModalScreen):
                 id="create-eula",
             )
             yield Static(
-                "Для изменения nftables нужны права администратора (sudo -v перед TUI).\nРежим «пиратка» не проверяет владение аккаунтом; на Paper/Purpur устанавливается AuthMe.",
+                (
+                    "Windows: брандмауэр запросит UAC; автозапуск — после входа пользователя.\n"
+                    if windows()
+                    else "Для изменения nftables нужны права администратора (sudo -v перед TUI).\n"
+                )
+                + "Режим «пиратка» не проверяет владение аккаунтом; на Paper/Purpur устанавливается AuthMe.",
                 id="create-note",
             )
             yield Static("", id="create-progress", markup=False)

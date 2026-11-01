@@ -118,7 +118,9 @@ def restore(name, paths=None):
 
             from .config import Config, memory_mb
 
-            values = tomllib.loads((staging / "config/config.toml").read_text())
+            values = tomllib.loads(
+                (staging / "config/config.toml").read_text(encoding="utf-8")
+            )
             known = {field.name for field in fields(Config)}
             restored_config = Config(
                 **{key: value for key, value in values.items() if key in known}

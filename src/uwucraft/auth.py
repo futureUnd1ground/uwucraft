@@ -105,10 +105,12 @@ def reserve_admin(name, paths=None):
                 paths.data / "console.log",
                 paths.server / "plugins/AuthMe/authme.log",
             ]:
-                if file.exists() and password in file.read_text(errors="replace"):
+                if file.exists() and password in file.read_text(
+                    encoding="utf-8", errors="replace"
+                ):
                     atomic(
                         file,
-                        file.read_text(errors="replace").replace(
+                        file.read_text(encoding="utf-8", errors="replace").replace(
                             password, "[REDACTED]"
                         ),
                     )

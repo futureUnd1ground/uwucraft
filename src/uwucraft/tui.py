@@ -297,7 +297,7 @@ class Uwucraft(App):
             report_file = self.paths.data / "deployment.json"
             if report_file.exists():
                 try:
-                    report = json.loads(report_file.read_text())
+                    report = json.loads(report_file.read_text(encoding="utf-8"))
                     messages = report.get("errors", []) + report.get("warnings", [])
                     await area.mount(
                         self.card(
@@ -486,7 +486,9 @@ class Uwucraft(App):
         result = []
         for name in ["whitelist", "ops"]:
             file = self.paths.server / (name + ".json")
-            players = json.loads(file.read_text()) if file.exists() else []
+            players = (
+                json.loads(file.read_text(encoding="utf-8")) if file.exists() else []
+            )
             result.append(
                 name + ": " + (", ".join(p["name"] for p in players) or "Пусто")
             )

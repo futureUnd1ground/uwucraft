@@ -9,14 +9,15 @@ from xml.etree import ElementTree
 import psutil
 
 from .config import Config, Error, Paths, atomic, memory_mb
+from .platforms import os_name, windows
 from .sources import download, get, metadata, minecraft, resolve
 
 LOADERS = ["vanilla", "paper", "purpur", "fabric", "forge", "neoforge"]
 
 
 def preflight(paths, memory, port):
-    if platform.system() != "Linux":
-        raise Error("Требуется Linux.")
+    if platform.system() not in {"Linux", "Windows"}:
+        raise Error("Поддерживаются Linux и Windows 10/11.")
     if memory_mb(memory) < 512:
         raise Error("Минимум 512M памяти.")
     if memory_mb(memory) * 1024**2 > psutil.virtual_memory().available - 1024**3:
@@ -32,7 +33,7 @@ def preflight(paths, memory, port):
     except OSError:
         raise Error(f"Порт {port} занят или недоступен.") from None
     return {
-        "os": platform.freedesktop_os_release().get("ID", "unknown"),
+        "os": os_name(),
         "arch": platform.machine(),
     }
 
@@ -170,7 +171,10 @@ def install(
                         stderr=subprocess.STDOUT,
                         timeout=900,
                     )
-                if result.returncode or not (staging / "run.sh").exists():
+                if (
+                    result.returncode
+                    or not (staging / ("run.bat" if windows() else "run.sh")).exists()
+                ):
                     raise Error(
                         "Installer Forge/NeoForge завершился с ошибкой; установка не применена."
                     )

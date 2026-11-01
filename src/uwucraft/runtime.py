@@ -5,25 +5,32 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from .backups import safe_name
+from .backups import extract_zip, safe_name
 from .config import Error, Paths
+from .platforms import windows
 from .sources import download, metadata
 
 
 def provision(major, paths=None):
     paths = paths or Paths()
-    architecture = {"x86_64": "x64", "aarch64": "aarch64"}.get(platform.machine())
+    architecture = {
+        "x86_64": "x64",
+        "amd64": "x64",
+        "aarch64": "aarch64",
+        "arm64": "aarch64",
+    }.get(platform.machine().lower())
     if not architecture:
         raise Error("Автоустановка Temurin не поддерживает эту архитектуру.")
     target = paths.data / "runtimes" / str(major)
-    if (target / "bin/java").exists():
-        return str(target / "bin/java")
+    executable = "bin/java.exe" if windows() else "bin/java"
+    if (target / executable).exists():
+        return str(target / executable)
     assets = metadata(
         f"https://api.adoptium.net/v3/assets/latest/{major}/hotspot",
         params={
             "architecture": architecture,
             "image_type": "jre",
-            "os": "linux",
+            "os": "windows" if windows() else "linux",
             "vendor": "eclipse",
         },
     )
@@ -35,18 +42,21 @@ def provision(major, paths=None):
         directory = Path(directory)
         archive = directory / "runtime.tar.gz"
         download(package["link"], archive, {"sha256": package["checksum"]})
-        with tarfile.open(archive) as file:
-            members = file.getmembers()
-            if sum(i.size for i in members) > 1024**3:
-                raise Error("Runtime превышает лимит распаковки.")
-            for item in members:
-                safe_name(item.name)
-                # Temurin includes relative library symlinks. Python's data filter
-                # rejects links escaping the extraction root.
-            file.extractall(directory / "unpacked", filter="data")
+        if windows():
+            extract_zip(archive, directory / "unpacked")
+        else:
+            with tarfile.open(archive) as file:
+                members = file.getmembers()
+                if sum(i.size for i in members) > 1024**3:
+                    raise Error("Runtime превышает лимит распаковки.")
+                for item in members:
+                    safe_name(item.name)
+                    # Temurin includes relative library symlinks. Python's data filter
+                    # rejects links escaping the extraction root.
+                file.extractall(directory / "unpacked", filter="data")
         roots = list((directory / "unpacked").iterdir())
-        if len(roots) != 1 or not (roots[0] / "bin/java").exists():
+        if len(roots) != 1 or not (roots[0] / executable).exists():
             raise Error("Неожиданная структура Temurin runtime.")
         target.parent.mkdir(parents=True, exist_ok=True)
         roots[0].rename(target)
-    return str(target / "bin/java")
+    return str(target / executable)

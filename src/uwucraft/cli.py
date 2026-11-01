@@ -10,6 +10,7 @@ from rich.panel import Panel
 
 from . import backups, content, installers, network, server
 from .config import Error, Paths
+from .platforms import windows
 
 app = typer.Typer(
     no_args_is_help=False, help="uwucraft · A quiet home for your Minecraft server."
@@ -161,7 +162,7 @@ def stop():
 
 def _lifecycle(action):
     unit = Path.home() / ".config/systemd/user/uwucraft.service"
-    if unit.exists():
+    if unit.exists() and not windows():
         subprocess.run(["systemctl", "--user", action, "uwucraft.service"], check=True)
         if action in {"start", "restart"}:
             for _ in range(100):
@@ -388,7 +389,7 @@ def _player_command(prefix, action, player, allowed):
 @app.command("service")
 def service_install(enable: bool = False):
     console.print(str(server.unit()))
-    if enable:
+    if enable and not windows():
         subprocess.run(
             ["systemctl", "--user", "enable", "uwucraft.service"], check=True
         )
@@ -401,6 +402,15 @@ def backup_schedule(calendar: str = "daily"):
 
     from .config import atomic
 
+    if windows():
+        if calendar != "daily":
+            raise Error(
+                "Windows: поддерживается daily (ежедневно в 04:00 после входа пользователя)."
+            )
+        from .windows import task
+
+        console.print(task(Paths(), "backup", daily=True))
+        return
     if "\n" in calendar or "\r" in calendar:
         raise Error("Недопустимый календарь.")
     home = Path.home() / ".config/systemd/user"

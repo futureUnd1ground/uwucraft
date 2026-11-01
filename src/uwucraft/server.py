@@ -13,6 +13,7 @@ from pathlib import Path
 import psutil
 
 from .config import Error, Paths, atomic, memory_mb
+from .platforms import file_lock, windows
 
 
 def status(paths=None):
@@ -21,7 +22,7 @@ def status(paths=None):
         return {"status": "Stopped"}
     state = {}
     try:
-        state = json.loads(paths.state.read_text())
+        state = json.loads(paths.state.read_text(encoding="utf-8"))
         process = psutil.Process(state["pid"])
         if (
             abs(process.create_time() - state["created"]) > 0.1
@@ -50,6 +51,23 @@ def command(text, paths=None):
     paths = paths or Paths()
     if "\n" in text or "\r" in text or not text.strip() or len(text.encode()) > 4096:
         raise Error("Ожидается одна команда длиной до 4096 байт.")
+    if windows():
+        from multiprocessing.connection import Client
+
+        from .windows import pipe_address, pipe_key
+
+        try:
+            with Client(
+                pipe_address(paths), family="AF_PIPE", authkey=pipe_key(paths)
+            ) as client:
+                client.send_bytes(text.strip().encode())
+                if not client.poll(5) or client.recv_bytes(256) != b"OK":
+                    raise Error("Сервер не принял команду.")
+            return
+        except (OSError, EOFError) as exc:
+            raise Error(
+                "Локальная консоль Windows недоступна. Проверьте status/logs."
+            ) from exc
     try:
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(5)
@@ -69,24 +87,50 @@ def start(paths=None):
     with paths.lock():
         if status(paths)["status"] in {"Running", "Starting", "Stopping"}:
             raise Error("Сервер уже запущен или останавливается.")
-        if (
-            not (paths.server / "eula.txt").exists()
-            or "eula=true" not in (paths.server / "eula.txt").read_text()
-        ):
+        if not (paths.server / "eula.txt").exists() or "eula=true" not in (
+            paths.server / "eula.txt"
+        ).read_text(encoding="utf-8"):
             raise Error("Сначала uwucraft auto с явным принятием EULA.")
         if (
             not (paths.server / "server.jar").exists()
-            and not (paths.server / "run.sh").exists()
+            and not (paths.server / ("run.bat" if windows() else "run.sh")).exists()
         ):
             raise Error("Сервер не установлен.")
         paths.data.mkdir(parents=True, exist_ok=True)
+        if windows():
+            from .windows import wait_watchdog
+
+            wait_watchdog(paths)
         with (paths.data / "supervisor.log").open("ab") as log:
+            args = [sys.executable, "-m", "uwucraft.runner"]
+            options = {"start_new_session": True}
+            if windows():
+                args = [
+                    sys.executable,
+                    "-m",
+                    "uwucraft.windows",
+                    "server",
+                    "--config",
+                    str(paths.config.parent),
+                    "--data",
+                    str(paths.data.parent),
+                ]
+                options = {
+                    "creationflags": subprocess.CREATE_NO_WINDOW
+                    | subprocess.CREATE_NEW_PROCESS_GROUP
+                }
+            env = os.environ.copy()
+            env.update(
+                XDG_CONFIG_HOME=str(paths.config.parent),
+                XDG_DATA_HOME=str(paths.data.parent),
+            )
             subprocess.Popen(
-                [sys.executable, "-m", "uwucraft.runner"],
+                args,
                 stdin=subprocess.DEVNULL,
                 stdout=log,
                 stderr=log,
-                start_new_session=True,
+                env=env,
+                **options,
             )
         for _ in range(100):
             if status(paths)["status"] in {"Starting", "Running"}:
@@ -97,7 +141,9 @@ def start(paths=None):
 
 def stop(paths=None):
     paths = paths or Paths()
-    if status(paths)["status"] == "Stopped":
+    if windows():
+        atomic(paths.data / "watchdog-stop", "stop")
+    if status(paths)["status"] in {"Stopped", "Crashed"}:
         return
     command("stop", paths)
     for _ in range(1200):
@@ -129,13 +175,15 @@ def supervise():
     paths = Paths()
     config = paths.load()
     paths.data.mkdir(parents=True, exist_ok=True, mode=0o700)
-    import fcntl
+    with (paths.data / "runner.lock").open("a+") as guard:
+        try:
+            with file_lock(guard):
+                return _supervise(paths, config)
+        except (BlockingIOError, PermissionError):
+            raise Error("Supervisor уже работает.") from None
 
-    guard = (paths.data / "runner.lock").open("a")
-    try:
-        fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise Error("Supervisor уже работает.") from None
+
+def _supervise(paths, config):
     paths.socket.unlink(missing_ok=True)
     ram = memory_mb(config.memory)
     args = [
@@ -145,11 +193,13 @@ def supervise():
         "-XX:+UseG1GC",
         "-XX:+ParallelRefProcEnabled",
         "-XX:+ExitOnOutOfMemoryError",
+        "-Dfile.encoding=UTF-8",
     ]
     if config.loader in {"forge", "neoforge"}:
-        argument_files = list((paths.server / "libraries").glob("**/unix_args.txt"))
+        argument_name = "win_args.txt" if windows() else "unix_args.txt"
+        argument_files = list((paths.server / "libraries").glob("**/" + argument_name))
         if len(argument_files) != 1:
-            raise Error("Не найден однозначный Forge/NeoForge unix_args.txt.")
+            raise Error(f"Не найден однозначный Forge/NeoForge {argument_name}.")
         args += ["@" + str(argument_files[0]), "nogui"]
     else:
         args += ["-jar", "server.jar", "nogui"]
@@ -160,6 +210,8 @@ def supervise():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
     )
     state = {
@@ -188,39 +240,65 @@ def supervise():
 
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
-    listener = socket.socket(socket.AF_UNIX)
-    listener.bind(str(paths.socket))
-    os.chmod(paths.socket, 0o600)
-    listener.listen(8)
-    listener.settimeout(1)
+    if windows():
+        from multiprocessing.connection import Listener
 
-    def serve():
-        while process.poll() is None:
-            try:
-                client, _ = listener.accept()
-                with client:
-                    client.settimeout(2)
-                    data = b""
-                    while b"\n" not in data and len(data) <= 4096:
-                        chunk = client.recv(4096)
-                        if not chunk:
-                            break
-                        data += chunk
-                    text = data.decode().strip()
-                    if (
-                        text
-                        and "\n" not in text
-                        and "\r" not in text
-                        and len(data) <= 4097
-                    ):
-                        send(text)
-                        client.sendall(b"OK")
-            except (OSError, UnicodeError):
-                continue
+        from .windows import pipe_address, pipe_key
 
-    threading.Thread(target=serve, daemon=True).start()
+        listener = Listener(
+            pipe_address(paths), family="AF_PIPE", authkey=pipe_key(paths)
+        )
+
+        def serve_pipe():
+            from multiprocessing import AuthenticationError
+
+            while process.poll() is None:
+                try:
+                    with listener.accept() as client:
+                        if not client.poll(2):
+                            continue
+                        text = client.recv_bytes(4096).decode()
+                        if text and "\n" not in text and "\r" not in text:
+                            send(text)
+                            client.send_bytes(b"OK")
+                except (OSError, EOFError, UnicodeError, AuthenticationError):
+                    continue
+
+        threading.Thread(target=serve_pipe, daemon=True).start()
+    else:
+        listener = socket.socket(socket.AF_UNIX)
+        listener.bind(str(paths.socket))
+        os.chmod(paths.socket, 0o600)
+        listener.listen(8)
+        listener.settimeout(1)
+
+        def serve():
+            while process.poll() is None:
+                try:
+                    client, _ = listener.accept()
+                    with client:
+                        client.settimeout(2)
+                        data = b""
+                        while b"\n" not in data and len(data) <= 4096:
+                            chunk = client.recv(4096)
+                            if not chunk:
+                                break
+                            data += chunk
+                        text = data.decode().strip()
+                        if (
+                            text
+                            and "\n" not in text
+                            and "\r" not in text
+                            and len(data) <= 4097
+                        ):
+                            send(text)
+                            client.sendall(b"OK")
+                except (OSError, UnicodeError):
+                    continue
+
+        threading.Thread(target=serve, daemon=True).start()
     try:
-        with (paths.data / "console.log").open("a") as log:
+        with (paths.data / "console.log").open("a", encoding="utf-8") as log:
             for line in process.stdout:
                 log.write(line)
                 log.flush()
@@ -236,6 +314,10 @@ def supervise():
 
 def unit(paths=None, system=False):
     paths = paths or Paths()
+    if windows():
+        from .windows import task
+
+        return task(paths)
     executable = str(Path(sys.executable).absolute())
     # System unit uses the owning account; an isolated service user is deliberately
     # not inferred from private home-directory installations.

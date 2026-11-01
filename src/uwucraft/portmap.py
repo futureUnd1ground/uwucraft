@@ -12,6 +12,7 @@ from xml.sax.saxutils import escape
 import httpx
 
 from .config import Error
+from .platforms import windows
 
 
 @dataclass
@@ -29,6 +30,10 @@ class MappingError(Error):
 
 
 def route():
+    if windows():
+        from .windows import route as windows_route
+
+        return windows_route()
     import subprocess
 
     try:

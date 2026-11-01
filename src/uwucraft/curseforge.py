@@ -9,6 +9,7 @@ from pathlib import Path
 from .backups import require_stopped, safe_name
 from .config import Error, Paths, atomic
 from .content import inventory
+from .platforms import windows
 from .sources import download, metadata
 
 API = "https://api.curseforge.com/v1"
@@ -19,11 +20,13 @@ def api(path, paths=None, **kwargs):
     key = os.environ.get("CURSEFORGE_API_KEY", "")
     file = paths.config / "secrets.toml"
     if not key and file.exists():
-        if file.stat().st_mode & 0o077:
+        if not windows() and file.stat().st_mode & 0o077:
             raise Error(
                 "Секреты доступны другим пользователям. Выполните chmod 600 secrets.toml."
             )
-        key = tomllib.loads(file.read_text()).get("curseforge_api_key", "")
+        key = tomllib.loads(file.read_text(encoding="utf-8")).get(
+            "curseforge_api_key", ""
+        )
     if not key:
         raise Error(
             "CurseForge требует CURSEFORGE_API_KEY или curseforge_api_key в secrets.toml (chmod 600)."

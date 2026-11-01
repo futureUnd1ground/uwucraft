@@ -1,4 +1,3 @@
-import fcntl
 import os
 import re
 import tempfile
@@ -8,6 +7,8 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 import tomli_w
+
+from .platforms import file_lock, windows
 
 
 class Error(Exception):
@@ -54,14 +55,18 @@ class Config:
 
 class Paths:
     def __init__(self):
-        self.config = (
-            Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-            / "uwucraft"
+        config_home = (
+            Path(os.environ.get("APPDATA", Path.home() / "AppData/Roaming"))
+            if windows()
+            else Path.home() / ".config"
         )
-        self.data = (
-            Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
-            / "uwucraft"
+        data_home = (
+            Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+            if windows()
+            else Path.home() / ".local/share"
         )
+        self.config = Path(os.environ.get("XDG_CONFIG_HOME", config_home)) / "uwucraft"
+        self.data = Path(os.environ.get("XDG_DATA_HOME", data_home)) / "uwucraft"
         self.server = self.data / "server"
         self.backups = self.data / "backups"
         self.file = self.config / "config.toml"
@@ -71,10 +76,10 @@ class Paths:
     def load(self):
         if not self.file.exists():
             return Config()
-        values = tomllib.loads(self.file.read_text())
+        values = tomllib.loads(self.file.read_text(encoding="utf-8"))
         properties = self.server / "server.properties"
         if properties.exists():
-            for line in properties.read_text().splitlines():
+            for line in properties.read_text(encoding="utf-8").splitlines():
                 if line.startswith("online-mode=") and line.split("=", 1)[1] in {
                     "true",
                     "false",
@@ -99,12 +104,9 @@ class Paths:
     @contextmanager
     def lock(self):
         self.data.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with (self.data / "operation.lock").open("a") as file:
+        with (self.data / "operation.lock").open("a+") as file:
             try:
-                fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
+                with file_lock(file):
+                    yield
+            except (BlockingIOError, PermissionError):
                 raise Error("Другая операция уже выполняется.") from None
-            try:
-                yield
-            finally:
-                fcntl.flock(file, fcntl.LOCK_UN)

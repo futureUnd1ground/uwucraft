@@ -9,13 +9,16 @@ from pathlib import Path
 
 from . import firewall, network, portmap, server
 from .config import Error, Paths, atomic
+from .platforms import windows
 
 
 def disable_legacy_service(paths=None):
     # Migration of the previous release's optional networking unit. Never delete
     # world files or modify an unrelated system service.
+    if windows():
+        return
     unit = Path.home() / ".config/systemd/user/uwucraft-tunnel.service"
-    if unit.exists() and "Description=uwucraft" in unit.read_text():
+    if unit.exists() and "Description=uwucraft" in unit.read_text(encoding="utf-8"):
         result = subprocess.run(
             ["systemctl", "--user", "disable", "--now", unit.name],
             capture_output=True,
@@ -39,6 +42,12 @@ def disable_legacy_service(paths=None):
 
 
 def enable_renewal(paths):
+    if windows():
+        from .windows import task
+
+        task(paths, "network", start=True)
+        return
+
     def q(value):
         return (
             '"'
@@ -103,7 +112,11 @@ def configure(paths=None, progress=None):
     def step(message):
         progress(message)
 
-    step("Настройка действующего брандмауэра nftables")
+    step(
+        "Настройка Windows Defender Firewall"
+        if windows()
+        else "Настройка действующего брандмауэра nftables"
+    )
     try:
         report["firewall"] = firewall.configure(config.port)
     except (
@@ -179,6 +192,11 @@ def configure(paths=None, progress=None):
 
 
 def enable_server(paths):
+    if windows():
+        from .windows import task
+
+        task(paths)
+        return ""
     server.unit(paths)
     subprocess.run(
         ["systemctl", "--user", "enable", "uwucraft.service"], check=True, timeout=15
@@ -202,6 +220,10 @@ def enable_server(paths):
 
 
 def start_server(paths):
+    if windows():
+        server.start(paths)
+        server.wait_ready(paths)
+        return
     subprocess.run(
         ["systemctl", "--user", "start", "uwucraft.service"], check=True, timeout=30
     )

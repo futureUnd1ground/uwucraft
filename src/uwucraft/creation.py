@@ -9,6 +9,7 @@ import psutil
 
 from . import backups, deployment, installers
 from .config import Error, Paths, memory_mb
+from .platforms import windows
 from .sources import latest_compatible
 
 
@@ -71,6 +72,10 @@ class CreateOptions:
 
 def dependencies():
     """Java is provisioned per-user; iproute2 is the only missing host utility."""
+    if windows():
+        if not shutil.which("powershell.exe"):
+            raise Error("Нужен Windows PowerShell (Windows 10/11).")
+        return []
     if not shutil.which("systemctl") or not shutil.which("loginctl"):
         raise Error("Нужна система с работающим systemd и пользовательской сессией.")
     active = subprocess.run(
@@ -145,7 +150,11 @@ def create(options, paths=None, progress=None):
 
         progress("Установка AuthMe для режима без проверки аккаунтов")
         install_authme(paths)
-    progress("Настройка systemd и автозапуска")
+    progress(
+        "Настройка автозапуска Windows"
+        if windows()
+        else "Настройка systemd и автозапуска"
+    )
     warning = deployment.enable_server(paths)
     backups.create(paths)
     try:

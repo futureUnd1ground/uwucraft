@@ -22,7 +22,7 @@ KINDS = {
 def inventory(paths=None):
     paths = paths or Paths()
     file = paths.config / "content.json"
-    return json.loads(file.read_text()) if file.exists() else {}
+    return json.loads(file.read_text(encoding="utf-8")) if file.exists() else {}
 
 
 def install(source, kind="mod", paths=None):
@@ -236,7 +236,9 @@ def pack(source, paths=None):
             download(item["url"], archive, item["hashes"])
         extracted = temporary / "unpacked"
         extract_zip(archive, extracted)
-        index = json.loads((extracted / "modrinth.index.json").read_text())
+        index = json.loads(
+            (extracted / "modrinth.index.json").read_text(encoding="utf-8")
+        )
         deps = index["dependencies"]
         mapping = {"fabric": "fabric-loader", "forge": "forge", "neoforge": "neoforge"}
         if (
