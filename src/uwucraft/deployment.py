@@ -119,6 +119,12 @@ def configure(paths=None, progress=None, wan_ip=""):
         progress("Запуск публичного TCP relay bore.pub и настройка автозапуска")
         value = relay.setup(paths, host=paths.load().relay_host)
         progress("Независимая внешняя проверка Minecraft через TCP relay")
+        report["transport"] = value.get("transport", "system")
+        if value.get("transport_error"):
+            report["warnings"].append(
+                "Физический канал недоступен; relay использует системный маршрут/VPN: "
+                + value["transport_error"]
+            )
         result = network.probe(value["address"], paths)
         report["probe"] = result
         if result["online"] and result["identity_verified"]:

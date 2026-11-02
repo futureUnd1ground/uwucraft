@@ -639,6 +639,49 @@ def network_ping(host: str = "127.0.0.1", port: int = 25565):
     console.print(network.minecraft_status(host, port))
 
 
+@app.command("mods-check")
+def mods_check():
+    """Проверить metadata, зависимости, версии и повторяющиеся mod ID."""
+    from .modcheck import audit
+
+    report = audit()
+    console.print(report)
+    if report["errors"]:
+        raise typer.Exit(1)
+
+
+@app.command("debug")
+def debug_command(client_dir: str = "", external: bool = False, output: str = ""):
+    """Диагностика JVM, модов, клиента и relay без полного экспорта логов/секретов."""
+    import json
+
+    from .diagnostics import debug_report
+
+    report = debug_report(client_dir=client_dir or None, external=external)
+    text = json.dumps(report, ensure_ascii=False, indent=2)
+    console.print(text, markup=False)
+    if output:
+        from .config import atomic
+
+        target = Path(output).expanduser()
+        if target.exists():
+            raise Error("Файл отчёта уже существует и сохранён.")
+        atomic(target, text)
+
+
+@net.command("transport")
+def network_transport(mode: Annotated[str, typer.Argument()] = "physical"):
+    """Выбрать physical (без VPN), auto или system для TCP relay."""
+    if mode not in {"physical", "auto", "system"}:
+        raise Error("Транспорт: physical, auto или system.")
+    paths = Paths()
+    with paths.lock():
+        config = paths.load()
+        config.relay_transport = mode
+        paths.save(config)
+    network_configure()
+
+
 @app.command("doctor")
 def doctor():
     """Проверить систему без изменений."""

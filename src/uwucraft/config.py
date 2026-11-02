@@ -48,6 +48,7 @@ class Config:
     public_address: str = ""
     public_access: str = "direct"
     relay_host: str = "bore.pub"
+    relay_transport: str = "auto"
     max_players: int = 20
     online_mode: bool = True
     server_id: str = ""

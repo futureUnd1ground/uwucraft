@@ -352,6 +352,17 @@ def _install_many(sources, trust_files=False, paths=None):
                         record["hashes"][relative] = hashlib.file_digest(
                             stream, "sha256"
                         ).hexdigest()
+            from .modcheck import require_compatible
+
+            require_compatible(
+                paths,
+                [
+                    f
+                    for f in files
+                    if f.relative_to(stage.server).parts[0] == "mods"
+                    and f.suffix.lower() == ".jar"
+                ],
+            )
             committed = []
             try:
                 for file in files:

@@ -42,7 +42,7 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: ruff check src tests
       - run: ruff format --check src tests
-      - run: pytest -v tests/test_windows.py tests/test_local_content.py tests/test_profiles.py tests/test_creation.py::test_tui_create_button_and_shared_backend tests/test_creation.py::test_quick_create_never_prompts tests/test_core.py::test_backup_restore tests/test_core.py::test_tui_pages_and_theme --basetemp="${{ runner.temp }}/uwucraft-tests"
+      - run: pytest -v tests/test_windows.py tests/test_local_content.py tests/test_modcheck.py tests/test_direct_bridge.py tests/test_profiles.py tests/test_creation.py::test_tui_create_button_and_shared_backend tests/test_creation.py::test_quick_create_never_prompts tests/test_core.py::test_backup_restore tests/test_core.py::test_tui_pages_and_theme --basetemp="${{ runner.temp }}/uwucraft-tests"
         timeout-minutes: 8
       - uses: actions/upload-artifact@v4
         if: failure()

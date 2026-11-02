@@ -5,10 +5,12 @@ No relay address is an invitation until an independent Minecraft probe matches
 this server's MOTD identity. Minecraft and the user's world stay on this PC.
 """
 
+import hashlib
 import ipaddress
 import json
 import os
 import platform
+import queue
 import re
 import signal
 import socket
@@ -28,7 +30,7 @@ from .platforms import file_lock, windows
 from .sources import download, metadata
 
 
-def provision(paths=None):
+def provision(paths=None, refresh=False):
     paths = paths or Paths()
     architecture = {
         "x86_64": "x86_64",
@@ -42,6 +44,20 @@ def provision(paths=None):
         suffix = "x86_64-pc-windows-msvc.zip"
     else:
         suffix = str(architecture) + "-unknown-linux-musl.tar.gz"
+    manifest = paths.data / "tools/bore-cache.json"
+    if not refresh:
+        try:
+            cached = json.loads(manifest.read_text(encoding="utf-8"))
+            if cached["platform"] == suffix and re.fullmatch(
+                r"bore-v[0-9.]+(?:\.exe)?", cached["name"]
+            ):
+                binary = manifest.parent / cached["name"]
+                with binary.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                if digest == cached["sha256"]:
+                    return binary
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
     release = metadata("https://api.github.com/repos/ekzhang/bore/releases/latest")
     asset = next((a for a in release["assets"] if a["name"].endswith(suffix)), None)
     if not asset or not re.fullmatch(
@@ -52,8 +68,6 @@ def provision(paths=None):
     if not re.fullmatch(r"v[0-9.]+", tag):
         raise Error("Некорректная версия bore.")
     executable = paths.data / "tools" / ("bore-" + tag + (".exe" if windows() else ""))
-    if executable.is_file():
-        return executable
     paths.data.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=paths.data) as directory:
         archive = Path(directory) / "bore.archive"
@@ -88,7 +102,59 @@ def provision(paths=None):
                     raise Error("Некорректный архив bore.")
                 data = file.extractfile(items[0]).read()
         atomic(executable, data, 0o700)
+        atomic(
+            manifest,
+            json.dumps(
+                {
+                    "name": executable.name,
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                    "platform": suffix,
+                }
+            ),
+        )
     return executable
+
+
+def resolve_host(host, paths):
+    cache = paths.data / "relay-endpoint.json"
+    cached = ""
+    try:
+        value = json.loads(cache.read_text(encoding="utf-8"))
+        if value["host"] == host:
+            from .network import public_ipv4
+
+            cached = public_ipv4(value["ip"])
+            if 0 <= time.time() - value["checked_at"] < 3600:
+                return cached
+    except (OSError, ValueError, KeyError, TypeError, Error):
+        pass
+    result = queue.Queue(maxsize=1)
+
+    def lookup():
+        try:
+            value = socket.getaddrinfo(host, 7835, socket.AF_INET, socket.SOCK_STREAM)[
+                0
+            ][4][0]
+            result.put(value)
+        except OSError as exc:
+            result.put(exc)
+
+    threading.Thread(target=lookup, daemon=True).start()
+    try:
+        value = result.get(timeout=4)
+        if isinstance(value, Exception):
+            raise value
+        from .network import public_ipv4
+
+        ip = public_ipv4(value)
+        atomic(cache, json.dumps({"host": host, "ip": ip, "checked_at": time.time()}))
+        return ip
+    except (OSError, queue.Empty, Error) as exc:
+        if cached:
+            return cached
+        raise Error(
+            "DNS relay не ответил; сохранённого проверяемого IP ещё нет."
+        ) from exc
 
 
 def status(paths=None):
@@ -116,6 +182,29 @@ def setup(paths=None, host="bore.pub", timeout=45):
     if server.status(paths)["status"] != "Running":
         raise Error("Сначала запустите Minecraft и дождитесь готовности.")
     provision(paths)
+    config = paths.load()
+    desired = "system"
+    preparation_error = ""
+    if config.relay_transport not in {"auto", "system", "physical"}:
+        raise Error("relay_transport: auto, system или physical.")
+    if config.relay_transport != "system":
+        from .direct_bridge import prepare
+
+        ip = resolve_host(host, paths)
+        try:
+            prepare(ip)
+            desired = "physical"
+        except (Error, OSError, ValueError, subprocess.SubprocessError) as exc:
+            if config.relay_transport == "physical":
+                raise Error("Прямой канал relay без VPN не готов: " + str(exc)) from exc
+            preparation_error = str(exc)
+            print(
+                "TCP relay: физический канал недоступен, используется системный маршрут: "
+                + str(exc),
+                flush=True,
+            )
+    existing = status(paths)
+    restart = not existing or existing.get("transport", "system") != desired
     with paths.lock():
         config = paths.load()
         config.public_access = "relay"
@@ -125,7 +214,7 @@ def setup(paths=None, host="bore.pub", timeout=45):
     if windows():
         from .windows import task
 
-        if not status(paths):
+        if restart:
             from .windows import literal, powershell, task_name
 
             powershell(
@@ -174,7 +263,7 @@ WantedBy=default.target
         # A live service can still hold deleted files after a server directory
         # was recreated. enable --now does not restart that stale process.
         subprocess.run(
-            ["systemctl", "--user", "start" if status(paths) else "restart", unit.name],
+            ["systemctl", "--user", "restart" if restart else "start", unit.name],
             check=True,
             timeout=20,
         )
@@ -182,7 +271,11 @@ WantedBy=default.target
     while time.monotonic() < deadline:
         value = status(paths)
         if value:
-            return value
+            return (
+                {**value, "transport_error": preparation_error}
+                if preparation_error
+                else value
+            )
         time.sleep(0.25)
     raise Error(
         "Не удалось подключиться к TCP relay после автоматического перезапуска. Повторные попытки продолжаются в фоне; проверьте исходящий TCP 7835 и доступность bore.pub."
@@ -229,11 +322,21 @@ def _session(paths, executable, stopped):
     config = paths.load()
     host = config.relay_host
     # Resolve to a public IPv4 once, so the address and tested relay are identical.
-    addresses = socket.getaddrinfo(host, 7835, socket.AF_INET, socket.SOCK_STREAM)
-    ip = str(ipaddress.IPv4Address(addresses[0][4][0]))
+    ip = str(ipaddress.IPv4Address(resolve_host(host, paths)))
     from .network import public_ipv4
 
     public_ipv4(ip)
+    bridge = None
+    transport_error = ""
+    if config.relay_transport != "system":
+        from .direct_bridge import DirectBridge
+
+        try:
+            bridge = DirectBridge(ip)
+        except (Error, OSError, ValueError, subprocess.SubprocessError) as exc:
+            if config.relay_transport == "physical":
+                raise Error("Физический канал relay недоступен: " + str(exc)) from exc
+            transport_error = str(exc)
     args = [
         str(executable),
         "local",
@@ -241,21 +344,26 @@ def _session(paths, executable, stopped):
         "--local-host",
         "127.0.0.1",
         "--to",
-        ip,
+        bridge.listen_ip if bridge else ip,
         "--port",
         str(preferred_port(paths)),
     ]
     flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if windows() else {}
-    process = subprocess.Popen(
-        args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env={**os.environ, "NO_COLOR": "1"},
-        **flags,
-    )
+    try:
+        process = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env={**os.environ, "NO_COLOR": "1", "RUST_LOG": "info"},
+            **flags,
+        )
+    except BaseException:
+        if bridge:
+            bridge.close()
+        raise
     created = psutil.Process(process.pid).create_time()
 
     def shutdown(*_):
@@ -313,6 +421,11 @@ def _session(paths, executable, stopped):
                                 "pid": process.pid,
                                 "created": created,
                                 "provider": "bore",
+                                "transport": "physical" if bridge else "system",
+                                "interface": bridge.interface["device"]
+                                if bridge
+                                else "",
+                                "transport_error": transport_error,
                                 "checked_at": time.time(),
                             }
                         ),
@@ -333,6 +446,8 @@ def _session(paths, executable, stopped):
         return code, published
     finally:
         startup_timer.cancel()
+        if bridge:
+            bridge.close()
         finished.set()
         verifier.join(timeout=10)
         (paths.data / "relay.json").unlink(missing_ok=True)

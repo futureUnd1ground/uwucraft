@@ -96,6 +96,9 @@ def start(paths=None):
             and not (paths.server / ("run.bat" if windows() else "run.sh")).exists()
         ):
             raise Error("Сервер не установлен.")
+        from .modcheck import require_compatible
+
+        require_compatible(paths)
         paths.data.mkdir(parents=True, exist_ok=True)
         if windows():
             from .windows import wait_watchdog
@@ -172,6 +175,9 @@ def logs(paths=None, lines=160):
 
 def supervise():
     paths = Paths()
+    from .modcheck import require_compatible
+
+    require_compatible(paths)
     config = paths.load()
     paths.data.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (paths.data / "runner.lock").open("a+") as guard:

@@ -301,6 +301,7 @@ class Uwucraft(App):
                     ),
                     Button("Pause / Resume", id="pause"),
                     Button("Copy last error", id="copy-error"),
+                    Button("Диагностика", id="debug-server"),
                     RichLog(id="consolelog", wrap=True, markup=False),
                     Input(
                         placeholder="Команда Minecraft · Enter отправить · ↑↓ история",
@@ -312,6 +313,13 @@ class Uwucraft(App):
             self.log_snapshot = ""
             self.update_logs()
         elif self.page == "Network":
+            await area.mount(
+                Horizontal(
+                    Button("Диагностика", id="debug-server"),
+                    Button("Relay без VPN", id="physical-relay"),
+                    classes="actions",
+                )
+            )
             await area.mount(
                 self.card("ADDRESSES", self.connection(), id="network-addresses")
             )
@@ -396,6 +404,7 @@ class Uwucraft(App):
                 )
 
         elif self.page in {"Mods", "Plugins", "Packs"}:
+            await area.mount(Button("Проверить моды / диагностика", id="debug-server"))
             await area.mount(
                 Button(
                     "Установить файлы / Drag & Drop", id="drop-files", variant="primary"
@@ -862,6 +871,27 @@ class Uwucraft(App):
             )
         elif action in actions:
             actions[action]()
+        elif action == "debug-server":
+            from .debug_ui import DebugScreen
+
+            self.push_screen(DebugScreen(self.paths))
+        elif action == "physical-relay":
+
+            def physical_relay():
+                from . import relay
+
+                with self.paths.lock():
+                    config = self.paths.load()
+                    config.relay_transport = "physical"
+                    self.paths.save(config)
+                value = relay.setup(self.paths)
+                network.probe(value["address"], self.paths)
+                return network.connection_address(self.paths)
+
+            self.confirm(
+                "Привязать relay к физическому адаптеру без VPN? Системный запрос может потребовать права для узкого исходящего firewall-исключения. Игрокам потребуется переподключиться.",
+                physical_relay,
+            )
         elif action == "drop-files":
             from .drop_ui import DropFiles
 

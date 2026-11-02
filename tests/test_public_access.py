@@ -259,6 +259,9 @@ def test_setup_recovers_missing_state_without_restarting_minecraft(
 
     from uwucraft import relay
 
+    config = paths.load()
+    config.relay_transport = "system"
+    paths.save(config)
     ready = {"address": "9.9.9.9:45678"}
     state = [ready if healthy else {}]
     commands = []
@@ -278,3 +281,18 @@ def test_setup_recovers_missing_state_without_restarting_minecraft(
     assert any(("start" if healthy else "restart") in args for args in commands)
     assert not any(paths.unit_name in args for args in commands)
     assert (paths.server / "world/level.dat").read_bytes() == b"preserve"
+
+
+def test_strict_physical_mode_does_not_invite_old_system_transport(paths, monkeypatch):
+    from uwucraft import relay
+
+    config = paths.load()
+    config.public_access = "relay"
+    config.relay_transport = "physical"
+    paths.save(config)
+    monkeypatch.setattr(
+        relay, "status", lambda p: {"address": "8.8.8.8:25565", "transport": "system"}
+    )
+    evidence(paths)
+    with pytest.raises(Error):
+        network.connection_address(paths)

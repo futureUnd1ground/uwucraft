@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.0 — 2026-11-02
+
+- Предварительная проверка модов при пакетной установке и перед JVM: зависимости, версии Minecraft, дубли mod ID, client-only Fabric и объявленные конфликты; учёт вложенных JAR, без подмены resolver загрузчика.
+- `mods-check`, структурированный `debug --client-dir --external --output` и окно диагностики TUI с копированием отчёта и ограниченным чтением журналов.
+- Транспорт relay physical/auto/system: loopback TCP bridge с привязкой исходящих сокетов к обычному адаптеру, без изменения общих маршрутов и выключения VPN. Linux — узкое постоянное nftables egress-исключение с root-owned helper; ограничения WFP Windows сообщаются явно.
+- SHA-256 кэш bore позволяет запускать проверенный binary без запроса GitHub при каждом старте. Фиксирован INFO-уровень логирования для получения выделенного relay-порта.
+
 ## 0.6.0 — 2026-11-02
 
 - Единое окно Drag & Drop в Mods/Plugins/Packs/Worlds: несколько путей, многострочная вставка, file URI, Linux/Windows quotes, предпросмотр и общий backend с CLI `add-files --trust-files`.

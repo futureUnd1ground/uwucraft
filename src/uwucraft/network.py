@@ -50,6 +50,11 @@ def addresses(paths=None, public=False):
         from .relay import status
 
         value = status(paths)
+        if (
+            config.relay_transport == "physical"
+            and value.get("transport") != "physical"
+        ):
+            value = {}
         address = value.get("address", "Не определён")
         return {
             "public": address,

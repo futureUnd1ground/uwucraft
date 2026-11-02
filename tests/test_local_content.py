@@ -32,7 +32,14 @@ def archive(path, entries):
 
 
 def mod(path, **extra):
-    return archive(path, {"fabric.mod.json": json.dumps({"id": "example", **extra})})
+    return archive(
+        path,
+        {
+            "fabric.mod.json": json.dumps(
+                {"id": "example_" + str(sum(map(ord, path.name))), **extra}
+            )
+        },
+    )
 
 
 def test_drop_paths_spaces_unicode_quotes_uris(tmp_path):
