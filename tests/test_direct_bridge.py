@@ -183,6 +183,9 @@ def test_slow_chunk_reader_does_not_block_reverse_packets(monkeypatch):
     bridge.slots = threading.BoundedSemaphore(1)
     bridge.slots.acquire()
     incoming.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    outgoing.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    remote.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
     remote.settimeout(3)
     worker = threading.Thread(target=bridge.forward, args=(incoming,), daemon=True)
     worker.start()
@@ -190,7 +193,7 @@ def test_slow_chunk_reader_does_not_block_reverse_packets(monkeypatch):
 
     def chunks():
         try:
-            remote.sendall(b"x" * (4 * 1024 * 1024))
+            remote.sendall(b"x" * (16 * 1024 * 1024))
         except OSError:
             pass
         finally:
