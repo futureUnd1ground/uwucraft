@@ -324,6 +324,19 @@ def network_address():
     console.print(network.addresses(public=True))
 
 
+@app.command("add-files")
+def add_files(
+    files: Annotated[
+        list[str], typer.Argument(help="Один или несколько локальных JAR/ZIP/MRPACK")
+    ],
+    trust_files: bool = False,
+):
+    """Установить перетащенные локальные файлы одной проверяемой операцией."""
+    from .local_content import install_many
+
+    console.print(install_many(files, trust_files=trust_files))
+
+
 @mod.command("add")
 def mod_add(source: str):
     console.print(content.install(source))

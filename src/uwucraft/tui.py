@@ -397,6 +397,11 @@ class Uwucraft(App):
 
         elif self.page in {"Mods", "Plugins", "Packs"}:
             await area.mount(
+                Button(
+                    "Установить файлы / Drag & Drop", id="drop-files", variant="primary"
+                )
+            )
+            await area.mount(
                 Static(
                     "Установка и обновление требуют остановленного сервера. Modrinth проверяет версию и загрузчик.",
                     classes="subtitle",
@@ -477,6 +482,11 @@ class Uwucraft(App):
                 )
             )
         elif self.page == "Worlds":
+            await area.mount(
+                Button(
+                    "Импорт ZIP мира / Drag & Drop", id="drop-files", variant="primary"
+                )
+            )
             await area.mount(
                 self.card(
                     "WORLD STORAGE",
@@ -852,6 +862,10 @@ class Uwucraft(App):
             )
         elif action in actions:
             actions[action]()
+        elif action == "drop-files":
+            from .drop_ui import DropFiles
+
+            self.push_screen(DropFiles(self.paths))
         elif action == "create-server":
             self.action_create()
         elif action in {"import-server", "discover-servers"}:

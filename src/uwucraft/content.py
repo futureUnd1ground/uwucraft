@@ -166,8 +166,29 @@ def remove(slug, paths=None):
                 + ", ".join(dependants)
                 + ". Сначала удалите зависимый контент."
             )
-        safe_name(records[slug]["path"])
-        (paths.server / records[slug]["path"]).unlink(missing_ok=True)
+        record = records[slug]
+        if record["kind"] == "world":
+            raise Error(
+                "Удаление импортированного мира через контент запрещено; сначала сохраните backup."
+            )
+        files = record.get("paths") or [record["path"]]
+        targets = []
+        for relative in files:
+            safe_name(relative)
+            target = paths.server / relative
+            if not target.resolve().is_relative_to(paths.server.resolve()):
+                raise Error("Путь контента выходит за каталог сервера.")
+            expected = record.get("hashes", {}).get(relative)
+            if expected and target.exists():
+                import hashlib
+
+                with target.open("rb") as stream:
+                    actual = hashlib.file_digest(stream, "sha256").hexdigest()
+                if actual != expected:
+                    raise Error("Файл изменён после импорта и сохранён: " + relative)
+            targets.append(target)
+        for target in targets:
+            target.unlink(missing_ok=True)
         del records[slug]
         atomic(
             paths.config / "content.json",
