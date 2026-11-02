@@ -243,3 +243,16 @@ def test_windows_drop_quotes_do_not_eat_backslashes(monkeypatch):
     result = local_content.dropped_paths(text)
     assert str(result[0]) == r"C:\Users\Player Name\mods\a.jar"
     assert str(result[1]) == r"C:\mods\b.jar"
+
+
+def test_large_drop_list_is_not_treated_as_one_filesystem_name(tmp_path, monkeypatch):
+    files = [mod(tmp_path / f"example-{n}.jar") for n in range(40)]
+    original = Path.is_file
+
+    def is_file(path):
+        if len(str(path)) > 300:
+            raise OSError("File name too long")
+        return original(path)
+
+    monkeypatch.setattr(Path, "is_file", is_file)
+    assert local_content.dropped_paths(" ".join(f'"{f}"' for f in files)) == files

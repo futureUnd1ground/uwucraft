@@ -16,6 +16,13 @@ from .backups import MAX_UNPACKED, extract_zip, require_stopped, safe_name
 from .config import Error, Paths, atomic
 
 
+def _is_file(path):
+    try:
+        return path.is_file()
+    except (OSError, ValueError):
+        return False
+
+
 def dropped_paths(text):
     """Decode paths, not shell commands: Windows quotes, POSIX escapes, file URIs."""
     if len(text) > 65536 or "\x00" in text:
@@ -23,12 +30,12 @@ def dropped_paths(text):
     text = text.strip()
     if not text:
         raise Error("Перетащите файлы или вставьте их пути.")
-    if Path(text).is_file():
+    if _is_file(Path(text)):
         return [Path(text)]
     lines = text.splitlines()
     tokens = (
         lines
-        if len(lines) > 1 and all(Path(x).is_file() for x in lines)
+        if len(lines) > 1 and all(_is_file(Path(x)) for x in lines)
         else re.findall(r""""[^"]*"|'(?:[^']|'')*'|(?:\\[\s'"()]|[^\s])+""", text)
     )
     result = []
@@ -48,7 +55,7 @@ def dropped_paths(text):
             if re.match(r"^/[A-Za-z]:/", token):
                 token = token[1:]
         path = Path(token).expanduser()
-        if not path.is_file():
+        if not _is_file(path):
             raise Error(f"Файл не найден: {path}")
         if path not in result:
             result.append(path)
