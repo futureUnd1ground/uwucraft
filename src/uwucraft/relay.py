@@ -421,6 +421,7 @@ def _session(paths, executable, stopped):
                                 "pid": process.pid,
                                 "created": created,
                                 "provider": "bore",
+                                "local_port": config.port,
                                 "transport": "physical" if bridge else "system",
                                 "interface": bridge.interface["device"]
                                 if bridge

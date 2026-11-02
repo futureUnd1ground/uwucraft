@@ -313,10 +313,23 @@ class Uwucraft(App):
             self.log_snapshot = ""
             self.update_logs()
         elif self.page == "Network":
+            from . import owner_route
+
+            shortcut = owner_route.status(self.paths)
+            shortcut_active = bool(shortcut.get("endpoint")) and not shortcut.get(
+                "stale"
+            )
             await area.mount(
                 Horizontal(
                     Button("Диагностика", id="debug-server"),
                     Button("Relay без VPN", id="physical-relay"),
+                    Button(
+                        "Прямой путь ПК: вкл"
+                        if shortcut_active
+                        else "Быстро с этого ПК",
+                        id="owner-route",
+                        disabled=windows(),
+                    ),
                     classes="actions",
                 )
             )
@@ -880,6 +893,15 @@ class Uwucraft(App):
             from .debug_ui import DebugScreen
 
             self.push_screen(DebugScreen(self.paths))
+        elif action == "owner-route":
+            from . import owner_route
+
+            enabled = bool(owner_route.status(self.paths).get("endpoint"))
+            self.confirm(
+                ("Отключить" if enabled else "Включить")
+                + " прямой путь к своей JVM по публичному адресу? Только этот ПК и пользователь; пинг друзей не меняется. Linux nftables запросит права администратора.",
+                lambda: owner_route.configure(self.paths, disable=enabled),
+            )
         elif action == "physical-relay":
 
             def physical_relay():

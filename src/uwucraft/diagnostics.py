@@ -31,7 +31,7 @@ def debug_report(paths=None, client_dir=None, external=False):
     """Structured diagnosis; never exports launcher arguments or complete logs."""
     import re
 
-    from . import modcheck, network, relay, server
+    from . import modcheck, network, owner_route, relay, server
 
     paths = paths or Paths()
     config = paths.load()
@@ -44,6 +44,8 @@ def debug_report(paths=None, client_dir=None, external=False):
         "mods": modcheck.audit(paths),
         "relay": relay.status(paths),
         "requested_transport": config.relay_transport,
+        "owner_route": owner_route.status(paths),
+        "owner_route_note": "При включённом owner shortcut измерение публичного адреса с этого ПК идёт напрямую; внешняя доступность проверяется только независимым сервисом.",
         "findings": [],
     }
     try:

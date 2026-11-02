@@ -669,6 +669,24 @@ def debug_command(client_dir: str = "", external: bool = False, output: str = ""
         atomic(target, text)
 
 
+@net.command("owner-route")
+def network_owner_route(action: Annotated[str, typer.Argument()] = "enable"):
+    """Linux: тот же публичный адрес без обхода через интернет с этого ПК."""
+    from . import owner_route
+
+    if action not in {"enable", "disable", "status"}:
+        raise Error("Действие: enable, disable или status.")
+    value = (
+        owner_route.status()
+        if action == "status"
+        else owner_route.configure(disable=action == "disable")
+    )
+    console.print(value)
+    console.print(
+        "Только подключения владельца с этого ПК. Это не проверка внешнего пинга."
+    )
+
+
 @net.command("transport")
 def network_transport(mode: Annotated[str, typer.Argument()] = "physical"):
     """Выбрать physical (без VPN), auto или system для TCP relay."""
