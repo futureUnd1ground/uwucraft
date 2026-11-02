@@ -352,3 +352,13 @@ def test_addresses_shows_saved_external_result(paths):
         ),
     )
     assert network.addresses(paths)["reachability"] == "Доступен извне"
+
+
+async def test_state_refresh_during_base_screen_unmount_is_safe(paths):
+    from uwucraft.tui import Uwucraft
+
+    application = Uwucraft()
+    async with application.run_test(size=(140, 48)) as pilot:
+        await pilot.pause()
+        await application.query_one("#top").remove()
+        application.update_state()

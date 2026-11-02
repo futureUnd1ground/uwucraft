@@ -591,6 +591,11 @@ class Uwucraft(App):
             self.minecraft_metrics = metrics
 
     def update_state(self):
+        # Timers/workers may finish while the base screen is unmounting.
+        if not self.is_running or not self.screen_stack:
+            return
+        if not self.query("#top") or not self.query("#stats"):
+            return
         c = self.paths.load()
         state = server.status(self.paths)
         icon = {
