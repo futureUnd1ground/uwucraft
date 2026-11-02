@@ -119,7 +119,7 @@ def test_windows_deployment_dispatch(paths, monkeypatch):
     calls = []
     monkeypatch.setattr(deployment, "windows", lambda: True)
     monkeypatch.setattr(windows, "task", lambda *a, **k: calls.append(k))
-    monkeypatch.setattr(server, "start", lambda p: calls.append("start"))
+    monkeypatch.setattr(server, "manage", lambda action, p: calls.append(action))
     monkeypatch.setattr(server, "wait_ready", lambda p: calls.append("ready"))
     deployment.enable_server(paths)
     deployment.enable_renewal(paths)

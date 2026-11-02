@@ -286,19 +286,5 @@ def enable_server(paths):
 
 
 def start_server(paths):
-    if windows():
-        server.start(paths)
-        server.wait_ready(paths)
-        return
-    subprocess.run(
-        ["systemctl", "--user", "start", paths.unit_name], check=True, timeout=30
-    )
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        if server.status(paths)["status"] in {"Starting", "Running"}:
-            server.wait_ready(paths)
-            return
-        time.sleep(0.1)
-    raise Error(
-        "systemd не запустил supervisor. Проверьте journalctl --user -u uwucraft.service."
-    )
+    server.manage("start", paths)
+    server.wait_ready(paths)

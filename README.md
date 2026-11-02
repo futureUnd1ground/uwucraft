@@ -413,3 +413,7 @@ Windows-адаптер использует [официальные задачи
 Источники: [Mojang manifest](https://piston-meta.mojang.com/mc/game/version_manifest_v2.json), [Paper API](https://docs.papermc.io/misc/downloads-service/), [Fabric Meta](https://github.com/FabricMC/fabric-meta), [Purpur API](https://api.purpurmc.org/v2/purpur), [NeoForge](https://docs.neoforged.net/user/docs/server/), [RFC 6886](https://www.rfc-editor.org/rfc/rfc6886), [UPnP IGD](https://openconnectivity.org/developer/specifications/upnp-resources/upnp/internet-gateway-device-igd-v-2-0/), [nftables chain semantics](https://wiki.nftables.org/wiki-nftables/index.php/Configuring_chains).
 
 Minecraft принадлежит Mojang/Microsoft. uwucraft не аффилирован с Mojang и не распространяет серверные JAR.
+
+Управление сервером: `uwucraft start`, `uwucraft stop`, `uwucraft restart`, `uwucraft status` (для конкретного сервера добавьте `--profile ID` перед командой). Stop ждёт завершения реальной JVM и supervisor, в том числе запущенных отдельно от systemd. Повторный Start не запускает второй экземпляр. При зависшей остановке программа сообщает ошибку и не применяет принудительный kill. Ошибка чтения/проверки PID отображается как Unknown и блокирует изменения файлов.
+
+В окне Drag & Drop виден актуальный статус и есть кнопка «Остановить сервер». После остановки становится доступна установка; затем сервер запускается обычной кнопкой Start. Для установки обновления самой программы закройте старое окно TUI и откройте его снова.

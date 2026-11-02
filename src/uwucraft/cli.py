@@ -207,6 +207,12 @@ def stop():
 
 def _lifecycle(action):
     server.manage(action)
+    current = server.status()["status"]
+    console.print(
+        "Сервер остановлен."
+        if current == "Stopped"
+        else f"Состояние сервера: {current}"
+    )
 
 
 @app.command()

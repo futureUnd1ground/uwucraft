@@ -7,7 +7,7 @@ from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Label, Static, TextArea
 
-from . import local_content
+from . import local_content, server
 from .config import Error
 
 
@@ -36,6 +36,7 @@ class DropFiles(ModalScreen):
                 "JAR: моды/плагины; ZIP: datapack, resourcepack, server pack или мир; MRPACK: модпак. "
                 "Существующие файлы не перезаписываются."
             )
+            yield Static(id="drop-server-status", markup=False)
             yield TextArea(
                 id="drop-paths",
                 placeholder="Пути файлов — в кавычках или по одному на строку",
@@ -52,9 +53,51 @@ class DropFiles(ModalScreen):
                 markup=False,
             )
             with Horizontal(id="drop-actions"):
+                yield Button("Остановить сервер", id="drop-stop", variant="warning")
                 yield Button("Проверить список", id="drop-preview")
                 yield Button("Установить всё", id="drop-install", variant="primary")
                 yield Button("Закрыть", id="drop-close")
+
+    def on_mount(self):
+        self.refresh_server()
+        self.set_interval(1, self.refresh_server)
+
+    def refresh_server(self):
+        state = server.status(self.paths)["status"]
+        stopped = state in {"Stopped", "Crashed"}
+        self.query_one("#drop-server-status", Static).update(
+            f"Сервер: {state}. "
+            + (
+                "Можно устанавливать файлы."
+                if stopped
+                else "Сначала остановите JVM; мир будет сохранён."
+            )
+        )
+        self.query_one("#drop-stop", Button).disabled = self.installing or stopped
+        self.query_one("#drop-install", Button).disabled = (
+            self.installing or not stopped
+        )
+
+    @work(exclusive=True)
+    async def stop_server(self):
+        self.installing = True
+        for button in self.query(Button):
+            button.disabled = True
+        self.query_one("#drop-result", Static).update(
+            "Остановка JVM и сохранение мира…"
+        )
+        try:
+            await asyncio.to_thread(server.manage, "stop", self.paths)
+            self.query_one("#drop-result", Static).update(
+                "Сервер остановлен. Можно установить файлы."
+            )
+        except (Error, OSError, ValueError) as exc:
+            self.query_one("#drop-result", Static).update(str(exc))
+        finally:
+            self.installing = False
+            for button in self.query(Button):
+                button.disabled = False
+            self.refresh_server()
 
     BINDINGS = [("escape", "close", "Закрыть")]
 
@@ -70,6 +113,9 @@ class DropFiles(ModalScreen):
                 self.dismiss(None)
             return
         if self.installing:
+            return
+        if event.button.id == "drop-stop":
+            self.stop_server()
             return
         if event.button.id in {"drop-preview", "drop-install"}:
             try:
@@ -121,3 +167,4 @@ class DropFiles(ModalScreen):
             self.installing = False
             for button in self.query(Button):
                 button.disabled = False
+            self.refresh_server()

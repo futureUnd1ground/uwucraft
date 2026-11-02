@@ -34,6 +34,8 @@ def status(paths=None):
                 if state["status"] not in {"Stopped", "Stopping"}
                 else "Stopped"
             }
+        if state.get("status") in {"Stopped", "Crashed"}:
+            state["status"] = "Running"  # A live matching JVM is never safe to edit.
         state["ram_mb"] = round(process.memory_info().rss / 1024**2)
         state["uptime"] = int(time.time() - state["created"])
         return state
@@ -43,8 +45,11 @@ def status(paths=None):
             if state.get("status") in {"Stopped", "Stopping"}
             else "Crashed"
         }
-    except (OSError, ValueError, KeyError, psutil.Error):
-        return {"status": "Stopped"}
+    except (OSError, ValueError, KeyError, psutil.Error) as exc:
+        return {
+            "status": "Unknown",
+            "error": f"Не удалось проверить PID сервера: {type(exc).__name__}",
+        }
 
 
 def command(text, paths=None):
@@ -85,7 +90,7 @@ def command(text, paths=None):
 def start(paths=None):
     paths = paths or Paths()
     with paths.lock():
-        if status(paths)["status"] in {"Running", "Starting", "Stopping"}:
+        if status(paths)["status"] not in {"Stopped", "Crashed"}:
             raise Error("Сервер уже запущен или останавливается.")
         if not (paths.server / "eula.txt").exists() or "eula=true" not in (
             paths.server / "eula.txt"
@@ -143,13 +148,50 @@ def start(paths=None):
 
 def stop(paths=None):
     paths = paths or Paths()
+    with paths.lock():
+        return _stop(paths)
+
+
+def _stop(paths):
     if windows():
         atomic(paths.data / "watchdog-stop", "stop")
-    if status(paths)["status"] in {"Stopped", "Crashed"}:
-        return
-    command("stop", paths)
-    for _ in range(1200):
+    state = status(paths)
+    if state["status"] == "Unknown":
+        raise Error(
+            "Не удалось проверить процесс сервера. Проверьте state.json и права доступа; остановка не подтверждена."
+        )
+    if state["status"] not in {"Stopped", "Crashed", "Stopping"}:
+        try:
+            command("stop", paths)
+        except Error:
+            # A detached supervisor can lose its console. SIGTERM invokes the
+            # JVM shutdown hook on Linux; never terminate()/kill a Windows JVM.
+            if windows():
+                raise
+            try:
+                process = psutil.Process(state["pid"])
+                if abs(process.create_time() - state["created"]) > 0.1:
+                    raise Error("PID сервера изменился; сигнал не отправлен.")
+                process.send_signal(signal.SIGTERM)
+            except psutil.NoSuchProcess:
+                pass
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
         if status(paths)["status"] in {"Stopped", "Crashed"}:
+            try:
+                with (paths.data / "runner.lock").open("a+") as guard, file_lock(guard):
+                    pass
+            except (BlockingIOError, PermissionError):
+                time.sleep(0.1)
+                continue
+            if paths.state.exists():
+                saved = json.loads(paths.state.read_text(encoding="utf-8"))
+                saved["status"] = "Stopped"
+                atomic(paths.state, json.dumps(saved))
+            if windows():
+                from .windows import wait_watchdog
+
+                wait_watchdog(paths)
             return
         time.sleep(0.1)
     raise Error(
@@ -244,7 +286,7 @@ def _supervise(paths, config):
             if process.poll() is None:
                 process.stdin.write(text + "\n")
                 process.stdin.flush()
-                if text == "stop":
+                if text.strip().lstrip("/").lower() == "stop":
                     persist("Stopping")
 
     def handle_signal(*_):
@@ -319,7 +361,11 @@ def _supervise(paths, config):
             for line in process.stdout:
                 log.write(line)
                 log.flush()
-                if "Done (" in line and "For help" in line:
+                if (
+                    state["status"] == "Starting"
+                    and "Done (" in line
+                    and "For help" in line
+                ):
                     persist("Running")
         code = process.wait()
         persist("Stopped" if code == 0 else "Crashed")
@@ -419,16 +465,66 @@ def wait_ready(paths=None, timeout=240):
 
 
 def manage(action, paths=None):
-    """One lifecycle authority for CLI, TUI and plugin setup."""
+    """One lifecycle authority, including detached JVMs outside a failed unit."""
     paths = paths or Paths()
     if action not in {"start", "stop", "restart"}:
         raise Error("Действие: start/stop/restart.")
+    paths.data.mkdir(parents=True, exist_ok=True)
+    with (paths.data / "lifecycle.lock").open("a+") as guard:
+        try:
+            with file_lock(guard):
+                return _manage(action, paths)
+        except (BlockingIOError, PermissionError):
+            raise Error(
+                "Управление сервером уже выполняется; дождитесь завершения."
+            ) from None
+
+
+def _manage(action, paths):
     unit_file = Path.home() / ".config/systemd/user" / paths.unit_name
-    if not windows() and unit_file.exists():
-        subprocess.run(
-            ["systemctl", "--user", action, paths.unit_name], check=True, timeout=180
+    managed = not windows() and unit_file.exists()
+    if action in {"stop", "restart"}:
+        service_error = None
+        if managed:
+            try:
+                subprocess.run(
+                    ["systemctl", "--user", "stop", paths.unit_name],
+                    check=True,
+                    timeout=180,
+                )
+            except (subprocess.SubprocessError, OSError) as exc:
+                service_error = exc
+        # A dead/failed systemd unit does not prove a detached JVM is stopped.
+        stop(paths)
+        if service_error:
+            raise Error(
+                "JVM остановлена, но systemd не подтвердил остановку сервиса: "
+                + str(service_error)
+            )
+        if action == "stop":
+            return
+    state = status(paths)["status"]
+    if state in {"Running", "Starting"}:
+        return  # Repeated Start never spawns a competing supervisor.
+    if state == "Unknown":
+        raise Error(
+            "Не удалось проверить PID сервера; запуск отменён. Проверьте state.json и права доступа."
         )
-        if action in {"start", "restart"}:
+    if state == "Stopping":
+        raise Error("Сервер ещё сохраняет мир. Дождитесь остановки.")
+    if managed:
+        # Serialize service startup against installs/backups, just like start().
+        with paths.lock():
+            subprocess.run(
+                ["systemctl", "--user", "reset-failed", paths.unit_name],
+                check=True,
+                timeout=30,
+            )
+            subprocess.run(
+                ["systemctl", "--user", "start", paths.unit_name],
+                check=True,
+                timeout=180,
+            )
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
                 if status(paths)["status"] in {"Starting", "Running"}:
@@ -437,11 +533,8 @@ def manage(action, paths=None):
             raise Error(
                 f"Supervisor не запустился. Проверьте journalctl --user -u {paths.unit_name}."
             )
-    elif action == "restart":
-        stop(paths)
-        start(paths)
     else:
-        {"start": start, "stop": stop}[action](paths)
+        start(paths)
 
 
 def unit_quote(value):
