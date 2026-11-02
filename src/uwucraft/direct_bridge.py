@@ -169,23 +169,48 @@ class DirectBridge:
             outgoing = connect(self.address)
             streams.append(outgoing)
             for stream in streams:
-                stream.settimeout(10)
+                stream.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                stream.setblocking(False)
             with self.guard:
                 self.streams.update(streams)
-            readable = list(streams)
-            while readable and not self.stopped.is_set():
-                ready, _, _ = select.select(readable, [], [], 1)
+            # Buffers belong to destinations. Never block one direction while
+            # chunks fill the other direction's TCP window. Bound memory per pair.
+            pending = {stream: bytearray() for stream in streams}
+            readable = set(streams)
+            half_closed = set()
+            peers = {incoming: outgoing, outgoing: incoming}
+            while not self.stopped.is_set():
+                for source in streams:
+                    target = peers[source]
+                    if (
+                        source not in readable
+                        and not pending[target]
+                        and target not in half_closed
+                    ):
+                        target.shutdown(socket.SHUT_WR)
+                        half_closed.add(target)
+                if not readable and not any(pending.values()):
+                    break
+                readers = [s for s in readable if len(pending[peers[s]]) < 1024 * 1024]
+                writers = [s for s in streams if pending[s]]
+                ready, writable, _ = select.select(readers, writers, [], 1)
+                for stream in writable:
+                    try:
+                        sent = stream.send(pending[stream])
+                    except BlockingIOError:
+                        continue
+                    if not sent:
+                        raise ConnectionError("Relay socket closed during write")
+                    del pending[stream][:sent]
                 for stream in ready:
-                    other = outgoing if stream is incoming else incoming
-                    data = stream.recv(65536)
+                    try:
+                        data = stream.recv(65536)
+                    except BlockingIOError:
+                        continue
                     if data:
-                        other.sendall(data)
+                        pending[peers[stream]].extend(data)
                     else:
                         readable.remove(stream)
-                        try:
-                            other.shutdown(socket.SHUT_WR)
-                        except OSError:
-                            pass
         except OSError as exc:
             print("Physical relay stream: " + str(exc), file=sys.stderr, flush=True)
         finally:

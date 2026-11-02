@@ -156,3 +156,57 @@ def test_relay_cached_endpoint_survives_dns_outage(tmp_path, monkeypatch):
     assert relay.resolve_host("bore.pub", p) == "159.223.110.159"
     with pytest.raises(Error, match="DNS"):
         relay.resolve_host("different-relay.example", p)
+
+
+def test_slow_chunk_reader_does_not_block_reverse_packets(monkeypatch):
+    """A full client receive window must not stall player/keepalive packets."""
+    client, incoming = socket.socketpair()
+    outgoing, remote = socket.socketpair()
+    # socketpair is AF_UNIX on Linux: only TCP sockets accept TCP_NODELAY.
+    original_option = socket.socket.setsockopt
+
+    def option(stream, level, key, value):
+        if stream.family == socket.AF_UNIX and level == socket.IPPROTO_TCP:
+            return
+        return original_option(stream, level, key, value)
+
+    monkeypatch.setattr(socket.socket, "setsockopt", option)
+    monkeypatch.setattr(direct_bridge, "connect", lambda *a: outgoing)
+    bridge = direct_bridge.DirectBridge.__new__(direct_bridge.DirectBridge)
+    bridge.address = "test"
+    bridge.stopped = threading.Event()
+    bridge.guard = threading.Lock()
+    bridge.streams = set()
+    bridge.slots = threading.BoundedSemaphore(1)
+    bridge.slots.acquire()
+    incoming.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    remote.settimeout(3)
+    worker = threading.Thread(target=bridge.forward, args=(incoming,), daemon=True)
+    worker.start()
+    sent = threading.Event()
+
+    def chunks():
+        try:
+            remote.sendall(b"x" * (4 * 1024 * 1024))
+        except OSError:
+            pass
+        finally:
+            sent.set()
+
+    sender = threading.Thread(target=chunks, daemon=True)
+    sender.start()
+    try:
+        # Wait until the bridge has reached its bounded backpressure buffer.
+        import time
+
+        time.sleep(0.15)
+        assert not sent.is_set()
+        client.sendall(b"keepalive")
+        assert remote.recv(9) == b"keepalive"
+    finally:
+        bridge.stopped.set()
+        client.close()
+        remote.close()
+        worker.join(3)
+        sender.join(3)
+    assert not worker.is_alive()
