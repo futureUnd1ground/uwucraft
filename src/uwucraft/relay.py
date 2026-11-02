@@ -125,6 +125,14 @@ def setup(paths=None, host="bore.pub", timeout=45):
     if windows():
         from .windows import task
 
+        if not status(paths):
+            from .windows import literal, powershell, task_name
+
+            powershell(
+                "Stop-ScheduledTask -TaskName "
+                + literal(task_name(paths, "relay"))
+                + " -ErrorAction SilentlyContinue"
+            )
         task(paths, "relay", start=True)
     else:
         from .server import unit_quote
@@ -159,9 +167,16 @@ WantedBy=default.target
         )
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True, timeout=15)
         subprocess.run(
-            ["systemctl", "--user", "enable", "--now", unit.name],
+            ["systemctl", "--user", "enable", unit.name],
             check=True,
             timeout=15,
+        )
+        # A live service can still hold deleted files after a server directory
+        # was recreated. enable --now does not restart that stale process.
+        subprocess.run(
+            ["systemctl", "--user", "start" if status(paths) else "restart", unit.name],
+            check=True,
+            timeout=20,
         )
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -170,7 +185,7 @@ WantedBy=default.target
             return value
         time.sleep(0.25)
     raise Error(
-        "TCP relay не выдал адрес за отведённое время. Проверьте relay.log и доступ к relay-host:7835."
+        "Не удалось подключиться к TCP relay после автоматического перезапуска. Повторные попытки продолжаются в фоне; проверьте исходящий TCP 7835 и доступность bore.pub."
     )
 
 
@@ -266,6 +281,14 @@ def _session(paths, executable, stopped):
 
     verifier = threading.Thread(target=verify_periodically, daemon=True)
     verifier.start()
+
+    def connection_timeout():
+        if not published and process.poll() is None:
+            process.kill()
+
+    startup_timer = threading.Timer(20, connection_timeout)
+    startup_timer.daemon = True
+    startup_timer.start()
     try:
         with (paths.data / "relay.log").open("a", encoding="utf-8") as log:
             for line in process.stdout:
@@ -309,6 +332,7 @@ def _session(paths, executable, stopped):
             (paths.data / "relay-port").unlink(missing_ok=True)
         return code, published
     finally:
+        startup_timer.cancel()
         finished.set()
         verifier.join(timeout=10)
         (paths.data / "relay.json").unlink(missing_ok=True)

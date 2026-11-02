@@ -249,3 +249,32 @@ def test_cli_explicit_direct_reaches_shared_creation_backend(paths, monkeypatch)
     )
     assert result.exit_code == 0, result.output
     assert received == ["direct"]
+
+
+@pytest.mark.parametrize("healthy", [True, False])
+def test_setup_recovers_missing_state_without_restarting_minecraft(
+    paths, monkeypatch, healthy
+):
+    from pathlib import Path
+
+    from uwucraft import relay
+
+    ready = {"address": "9.9.9.9:45678"}
+    state = [ready if healthy else {}]
+    commands = []
+    monkeypatch.setattr(relay, "windows", lambda: False)
+    monkeypatch.setattr(Path, "home", lambda: paths.data / "home")
+    monkeypatch.setattr(relay, "provision", lambda p: p.data / "bore")
+    monkeypatch.setattr(relay, "status", lambda p: state[0])
+
+    def run(args, **kwargs):
+        commands.append(args)
+        if "restart" in args:
+            state[0] = ready
+
+    monkeypatch.setattr(relay.subprocess, "run", run)
+    atomic(paths.server / "world/level.dat", b"preserve")
+    assert relay.setup(paths, timeout=0.1) == ready
+    assert any(("start" if healthy else "restart") in args for args in commands)
+    assert not any(paths.unit_name in args for args in commands)
+    assert (paths.server / "world/level.dat").read_bytes() == b"preserve"
