@@ -182,12 +182,19 @@ def test_slow_chunk_reader_does_not_block_reverse_packets(monkeypatch):
     bridge.streams = set()
     bridge.slots = threading.BoundedSemaphore(1)
     bridge.slots.acquire()
-    incoming.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
-    client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
-    outgoing.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
-    remote.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+    blocked = threading.Event()
+
+    class SlowReceiver:
+        def __getattr__(self, name):
+            return getattr(incoming, name)
+
+        def send(self, data):
+            blocked.set()
+            raise BlockingIOError("Simulated full receiver window")
+
+    slow = SlowReceiver()
     remote.settimeout(3)
-    worker = threading.Thread(target=bridge.forward, args=(incoming,), daemon=True)
+    worker = threading.Thread(target=bridge.forward, args=(slow,), daemon=True)
     worker.start()
     sent = threading.Event()
 
@@ -202,11 +209,8 @@ def test_slow_chunk_reader_does_not_block_reverse_packets(monkeypatch):
     sender = threading.Thread(target=chunks, daemon=True)
     sender.start()
     try:
-        # Wait until the bridge has reached its bounded backpressure buffer.
-        import time
-
-        time.sleep(0.15)
-        assert not sent.is_set()
+        # Force backpressure independently of OS TCP autotuning/loopback buffers.
+        assert blocked.wait(3)
         client.sendall(b"keepalive")
         assert remote.recv(9) == b"keepalive"
     finally:
