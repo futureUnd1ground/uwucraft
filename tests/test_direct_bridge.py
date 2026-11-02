@@ -166,7 +166,10 @@ def test_slow_chunk_reader_does_not_block_reverse_packets(monkeypatch):
     original_option = socket.socket.setsockopt
 
     def option(stream, level, key, value):
-        if stream.family == socket.AF_UNIX and level == socket.IPPROTO_TCP:
+        if (
+            stream.family == getattr(socket, "AF_UNIX", None)
+            and level == socket.IPPROTO_TCP
+        ):
             return
         return original_option(stream, level, key, value)
 
